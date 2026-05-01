@@ -46,11 +46,11 @@ type EstoqueSaidaInput = {
 const STORAGE_KEY = "autohub:estoque";
 
 function createEstoqueId() {
-  return `EST-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return createSecureId("EST");
 }
 
 function createMovimentacaoId() {
-  return `MOV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return createSecureId("MOV");
 }
 
 function normalizeText(value: string) {
@@ -285,3 +285,4 @@ export function registrarSaidaEstoque(input: EstoqueSaidaInput) {
   saveEstoque(updatedItems);
   return updatedItems;
 }
+import { createSecureId } from "../../utils/ids";

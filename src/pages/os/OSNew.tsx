@@ -1,13 +1,23 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { getClientes, type Cliente } from "../clientes/clientesStorage";
+import BackButton from "../../components/ui/BackButton";
+import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
+import { getClientes, type Cliente } from "../../services/clientesService";
 import {
+  calculatePaymentSimulation,
+  getConfiguracoesOficina,
+} from "../../services/configuracoesService";
+import {
+  createServiceOrderTimelineEvent,
+  createServiceOrderId,
   createNextOrderCode,
   getStoredOrders,
   saveStoredOrders,
   type ChecklistStatus,
   type ServiceOrder,
-} from "./osStorage";
+  type ServiceOrderPhoto,
+} from "../../services/osService";
+import ServiceOrderPhotosSection from "./ServiceOrderPhotosSection";
 
 const checklistItems = [
   "Freio",
@@ -23,6 +33,7 @@ type PartLine = {
   name: string;
   quantity: string;
   unitValue: string;
+  generatedFromChecklist?: string;
 };
 
 type LaborLine = {
@@ -55,6 +66,7 @@ export default function OSNew() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [clientes] = useState<Cliente[]>(() => getClientes());
+  const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [selectedClienteId, setSelectedClienteId] = useState(() => {
     const clienteId = searchParams.get("clienteId") || "";
     return getClientes().some((cliente) => cliente.id === clienteId) ? clienteId : "";
@@ -84,6 +96,10 @@ export default function OSNew() {
   );
   const [depositValue, setDepositValue] = useState("");
   const [depositPercent, setDepositPercent] = useState("");
+  const [photos, setPhotos] = useState<ServiceOrderPhoto[]>([]);
+  const [savedOrderId, setSavedOrderId] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
+  const [formError, setFormError] = useState("");
 
   const selectedCliente = useMemo(
     () => clientes.find((cliente) => cliente.id === selectedClienteId),
@@ -141,6 +157,24 @@ export default function OSNew() {
       saldoRestante: Math.max(totals.finalTotal - safeEntrada, 0),
     };
   }, [depositPercent, depositType, depositValue, requiresDeposit, totals.finalTotal]);
+  const paymentOptions = useMemo(() => {
+    const regras = oficinaConfig.regrasPagamento;
+    const baseArgs = [
+      totals.finalTotal,
+      depositSummary.entradaCalculada,
+      requiresDeposit,
+      regras,
+    ] as const;
+
+    return {
+      pix: calculatePaymentSimulation(...baseArgs, "Pix"),
+      dinheiro: calculatePaymentSimulation(...baseArgs, "Dinheiro"),
+      debito: calculatePaymentSimulation(...baseArgs, "Débito"),
+      credito: Array.from({ length: regras.credito.maxParcelas }, (_, index) =>
+        calculatePaymentSimulation(...baseArgs, "Crédito", index + 1),
+      ),
+    };
+  }, [depositSummary.entradaCalculada, oficinaConfig.regrasPagamento, requiresDeposit, totals.finalTotal]);
 
   function formatCurrency(value: number) {
     return value.toLocaleString("pt-BR", {
@@ -194,6 +228,7 @@ export default function OSNew() {
   }
 
   function updateChecklistStatus(item: string, status: ChecklistStatus) {
+    const observacaoTecnica = checklistState[item]?.observacaoTecnica ?? "";
     setChecklistState((currentState) => ({
       ...currentState,
       [item]: {
@@ -201,9 +236,11 @@ export default function OSNew() {
         status,
       },
     }));
+    syncChecklistSuggestion(item, status, observacaoTecnica);
   }
 
   function updateChecklistObservation(item: string, observacaoTecnica: string) {
+    const status = checklistState[item]?.status ?? "";
     setChecklistState((currentState) => ({
       ...currentState,
       [item]: {
@@ -211,11 +248,70 @@ export default function OSNew() {
         observacaoTecnica,
       },
     }));
+    syncChecklistSuggestion(item, status, observacaoTecnica);
+  }
+
+  function syncChecklistSuggestion(
+    item: string,
+    status: ChecklistStatus,
+    observacaoTecnica: string,
+  ) {
+    if (status !== "Trocar" || !observacaoTecnica.trim()) {
+      return;
+    }
+
+    setPartLines((lines) => {
+      if (
+        lines.some(
+          (line) =>
+            line.generatedFromChecklist === item ||
+            line.name.toLowerCase().includes(item.toLowerCase()),
+        )
+      ) {
+        return lines;
+      }
+
+      return [
+        ...lines,
+        {
+          id: Math.max(0, ...lines.map((line) => line.id)) + 1,
+          name: `${item}: ${observacaoTecnica.trim()}`,
+          quantity: "1",
+          unitValue: "0",
+          generatedFromChecklist: item,
+        },
+      ];
+    });
+  }
+
+  function removePartLine(lineId: number) {
+    setPartLines((lines) => lines.filter((line) => line.id !== lineId));
+  }
+
+  function createBudgetLink(orderId: string) {
+    if (typeof window === "undefined") {
+      return `/orcamento/${orderId}`;
+    }
+
+    return `${window.location.origin}/orcamento/${orderId}`;
   }
 
   function handleSaveOrder() {
+    setFormError("");
+
+    if (!selectedCliente) {
+      setFormError("Selecione um cliente antes de salvar a OS.");
+      return;
+    }
+
+    if (!selectedVehicle) {
+      setFormError("Selecione um veículo do cliente antes de salvar a OS.");
+      return;
+    }
+
     const currentOrders = getStoredOrders();
     const nextOrderCode = createNextOrderCode(currentOrders);
+    const now = new Date().toISOString();
     const vehicleDescription = [
       selectedVehicle?.marca,
       selectedVehicle?.modelo,
@@ -238,6 +334,7 @@ export default function OSNew() {
         quantidade,
         valorUnitario,
         valorTotal: quantidade * valorUnitario,
+        origemChecklist: line.generatedFromChecklist,
       };
     });
     const servicosMaoDeObra = laborLines.map((line) => ({
@@ -246,19 +343,33 @@ export default function OSNew() {
       descricao: line.description.trim(),
       valor: toNumber(line.value),
     }));
+    const clienteTelefone = onlyDigits(selectedCliente?.telefone || "");
+    const clienteDocumento = onlyDigits(selectedCliente?.documento || "");
     const newOrder: ServiceOrder = {
-      id: nextOrderCode,
+      id: createServiceOrderId(),
       codigo: nextOrderCode,
-      criadoEm: new Date().toISOString(),
-      cliente: selectedCliente?.nome || "Cliente sem nome",
-      telefone: selectedCliente?.telefone || "",
-      veiculo: vehicleDescription || "Veículo não informado",
-      placa: selectedVehicle?.placa || "",
+      criadoEm: now,
+      updatedAt: now,
+      version: 1,
+      cliente: selectedCliente.nome,
+      telefone: clienteTelefone,
+      veiculo: vehicleDescription,
+      placa: selectedVehicle.placa,
       servicoInicial: problemReport.trim(),
       observacao: [defectFound, probableCause, recommendedSolution]
         .filter(Boolean)
         .join(" | "),
-      status: "Em diagnóstico",
+      status: "ABERTA",
+      timeline: [
+        createServiceOrderTimelineEvent({
+          tipo: "criacao",
+          titulo: "OS criada",
+          descricao: `Ordem de serviço ${nextOrderCode} criada.`,
+          usuarioResponsavel: "Atendimento",
+          statusAnterior: "",
+          statusNovo: "ABERTA",
+        }),
+      ],
       statusAprovacao: "pendente",
       itensAprovados: [],
       dataDecisaoAprovacao: "",
@@ -276,32 +387,39 @@ export default function OSNew() {
       statusEntrada: requiresDeposit ? "pendente" : "nao_exige",
       dataPagamentoEntrada: "",
       valorEntradaPago: 0,
-      clienteId: selectedCliente?.id || "",
-      clienteNome: selectedCliente?.nome || "",
-      clienteTelefone: selectedCliente?.telefone || "",
-      veiculoId: selectedVehicle?.id || "",
-      veiculoMarca: selectedVehicle?.marca || "",
-      veiculoModelo: selectedVehicle?.modelo || "",
-      veiculoAno: selectedVehicle?.ano || "",
-      veiculoMotor: selectedVehicle?.motor || "",
-      veiculoCombustivel: selectedVehicle?.combustivel || "",
-      veiculoPlaca: selectedVehicle?.placa || "",
-      veiculoChassi: selectedVehicle?.chassiVin || "",
+      formaPagamentoEscolhida: "",
+      parcelasEscolhidas: 1,
+      valorFinalPagamento: 0,
+      descontoAplicado: 0,
+      taxaAplicada: 0,
+      descontoPagamentoAplicado: 0,
+      taxaPagamentoAplicada: 0,
+      clienteId: selectedCliente.id,
+      clienteNome: selectedCliente.nome,
+      clienteTelefone,
+      veiculoId: selectedVehicle.id,
+      veiculoMarca: selectedVehicle.marca,
+      veiculoModelo: selectedVehicle.modelo,
+      veiculoAno: selectedVehicle.ano,
+      veiculoMotor: selectedVehicle.motor,
+      veiculoCombustivel: selectedVehicle.combustivel,
+      veiculoPlaca: selectedVehicle.placa,
+      veiculoChassi: selectedVehicle.chassiVin,
       clienteDados: {
-        nome: selectedCliente?.nome || "",
-        telefone: selectedCliente?.telefone || "",
-        cpf: "",
-        cnpj: selectedCliente?.documento || "",
-        email: selectedCliente?.email || "",
+        nome: selectedCliente.nome,
+        telefone: clienteTelefone,
+        cpf: clienteDocumento.length <= 11 ? clienteDocumento : "",
+        cnpj: clienteDocumento.length > 11 ? clienteDocumento : "",
+        email: selectedCliente.email,
       },
       veiculoDados: {
-        marca: selectedVehicle?.marca || "",
-        modelo: selectedVehicle?.modelo || "",
-        ano: selectedVehicle?.ano || "",
-        placa: selectedVehicle?.placa || "",
-        motor: selectedVehicle?.motor || "",
-        combustivel: selectedVehicle?.combustivel || "",
-        chassiVin: selectedVehicle?.chassiVin || "",
+        marca: selectedVehicle.marca,
+        modelo: selectedVehicle.modelo,
+        ano: selectedVehicle.ano,
+        placa: selectedVehicle.placa,
+        motor: selectedVehicle.motor,
+        combustivel: selectedVehicle.combustivel,
+        chassiVin: selectedVehicle.chassiVin,
         kmAtual: "",
       },
       problemaRelatado: problemReport.trim(),
@@ -313,6 +431,7 @@ export default function OSNew() {
       checklistInicial,
       pecasNecessarias,
       servicosMaoDeObra,
+      fotosOs: photos,
       orcamento: {
         totalPecas: totals.partsTotal,
         totalMaoDeObra: totals.laborTotal,
@@ -324,27 +443,29 @@ export default function OSNew() {
       },
     };
 
-    saveStoredOrders([...currentOrders, newOrder]);
-    navigate("/os");
+    try {
+      saveStoredOrders([...currentOrders, newOrder]);
+      setSavedOrderId(newOrder.codigo);
+      setSaveMessage(`OS ${newOrder.codigo} salva com sucesso.`);
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar a OS.",
+      );
+    }
   }
 
   return (
     <div className="max-w-6xl">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-6">
+        <BackButton className="mb-4" />
         <div>
           <h2 className="text-3xl font-bold">Nova Ordem de Serviço</h2>
           <p className="mt-2 text-slate-400">
             Cadastro guiado para entrada, diagnóstico e orçamento.
           </p>
         </div>
-
-        <button
-          type="button"
-          onClick={() => navigate("/os")}
-          className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-        >
-          Voltar
-        </button>
       </div>
 
       <form
@@ -354,6 +475,12 @@ export default function OSNew() {
           handleSaveOrder();
         }}
       >
+        {formError && (
+          <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200">
+            {formError}
+          </div>
+        )}
+
         <section className={sectionClass}>
           <div className="mb-6">
             <span className="text-sm font-semibold uppercase text-sky-400">
@@ -393,10 +520,14 @@ export default function OSNew() {
                     Contato
                   </span>
                   <p className="mt-1 font-medium">
-                    {selectedCliente?.telefone || "Selecione um cliente"}
+                    {selectedCliente
+                      ? formatPhone(selectedCliente.telefone) || "-"
+                      : "Selecione um cliente"}
                   </p>
                   <p className="mt-1 text-sm text-slate-400">
-                    {selectedCliente?.documento || selectedCliente?.email || ""}
+                    {selectedCliente?.documento
+                      ? formatCpfCnpj(selectedCliente.documento)
+                      : selectedCliente?.email || ""}
                   </p>
                 </div>
               </div>
@@ -568,6 +699,14 @@ export default function OSNew() {
           </div>
         </section>
 
+        <ServiceOrderPhotosSection
+          photos={photos}
+          onChange={setPhotos}
+          sectionClass={sectionClass}
+          labelClass={labelClass}
+          inputClass={inputClass}
+        />
+
         <section className={sectionClass}>
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -642,9 +781,28 @@ export default function OSNew() {
                       {formatCurrency(lineTotal)}
                     </div>
                   </div>
+                  <div className="md:col-span-4">
+                    <button
+                      type="button"
+                      onClick={() => removePartLine(line.id)}
+                      className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                    >
+                      Remover peça
+                    </button>
+                  </div>
                 </div>
               );
             })}
+          </div>
+
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={addPartLine}
+              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
+              Adicionar peça
+            </button>
           </div>
         </section>
 
@@ -664,44 +822,44 @@ export default function OSNew() {
               onClick={addLaborLine}
               className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
             >
-              Adicionar serviço
+              Adicionar outro serviço
             </button>
           </div>
 
           <div className="grid gap-0">
-            {laborLines.map((line, index) => (
+            {laborLines.map((line) => (
               <div
                 key={line.id}
-                className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(150px,1.2fr)_minmax(180px,2fr)_130px]"
-              >
-                <div>
-                  <label className={labelClass}>Serviço {index + 1}</label>
-                  <input
-                    className={compactInputClass}
-                    placeholder="Troca de pastilhas"
+              className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(150px,1.2fr)_minmax(180px,2fr)_130px]"
+            >
+              <div>
+                  <label className={labelClass}>Serviço</label>
+                <input
+                  className={compactInputClass}
+                  placeholder="Troca de pastilhas"
                     value={line.service}
                     onChange={(event) =>
                       updateLaborLine(line.id, "service", event.target.value)
                     }
                   />
-                </div>
+              </div>
 
-                <div>
-                  <label className={labelClass}>Descrição</label>
-                  <input
-                    className={compactInputClass}
-                    placeholder="Remover rodas, substituir e testar"
+              <div>
+                  <label className={labelClass}>Observação</label>
+                <input
+                  className={compactInputClass}
+                  placeholder="Remover rodas, substituir e testar"
                     value={line.description}
                     onChange={(event) =>
                       updateLaborLine(line.id, "description", event.target.value)
                     }
                   />
-                </div>
+              </div>
 
-                <div>
-                  <label className={labelClass}>Valor</label>
-                  <input
-                    type="number"
+              <div>
+                  <label className={labelClass}>Valor da mão de obra</label>
+                <input
+                  type="number"
                     min="0"
                     step="0.01"
                     className={compactInputClass}
@@ -747,6 +905,14 @@ export default function OSNew() {
                 <strong className="text-xl text-sky-300">
                   {formatCurrency(totals.finalTotal)}
                 </strong>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
+                <p className="font-semibold text-slate-100">
+                  Entrada/sinal: {formatCurrency(depositSummary.entradaCalculada)}
+                </p>
+                <p className="mt-1 text-slate-400">
+                  Saldo restante: {formatCurrency(depositSummary.saldoRestante)}
+                </p>
               </div>
             </div>
 
@@ -875,16 +1041,68 @@ export default function OSNew() {
               </div>
             </div>
           </div>
+
+          <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <h4 className="font-semibold text-slate-100">
+              Formas de pagamento disponíveis
+            </h4>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Pix</span>
+                <p className="mt-1 font-semibold">{formatCurrency(paymentOptions.pix.valorFinalPagamento)}</p>
+                <p className="text-xs text-slate-500">Desconto {formatCurrency(paymentOptions.pix.descontoAplicado)}</p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Dinheiro</span>
+                <p className="mt-1 font-semibold">{formatCurrency(paymentOptions.dinheiro.valorFinalPagamento)}</p>
+                <p className="text-xs text-slate-500">Desconto {formatCurrency(paymentOptions.dinheiro.descontoAplicado)}</p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Débito</span>
+                <p className="mt-1 font-semibold">{formatCurrency(paymentOptions.debito.valorFinalPagamento)}</p>
+                <p className="text-xs text-slate-500">Desconto {formatCurrency(paymentOptions.debito.descontoAplicado)}</p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Crédito</span>
+                <p className="mt-1 font-semibold">
+                  até {oficinaConfig.regrasPagamento.credito.maxParcelas}x
+                </p>
+                <p className="text-xs text-slate-500">
+                  {oficinaConfig.regrasPagamento.credito.parcelasSemJuros}x sem juros
+                </p>
+              </div>
+            </div>
+          </div>
         </section>
 
-        <div className="sticky bottom-0 -mx-2 flex flex-wrap justify-end gap-3 border-t border-slate-800 bg-slate-950/95 px-2 py-4 backdrop-blur">
-          <button
-            type="button"
-            onClick={() => navigate("/os")}
-            className="rounded-xl border border-slate-700 px-6 py-3 font-semibold text-slate-200 hover:bg-slate-800"
-          >
-            Voltar
-          </button>
+        <div className="sticky bottom-0 -mx-2 flex flex-wrap items-center justify-end gap-3 border-t border-slate-800 bg-slate-950/95 px-2 py-4 backdrop-blur">
+          {saveMessage && (
+            <span className="mr-auto text-sm font-medium text-emerald-400">
+              {saveMessage}
+            </span>
+          )}
+
+          {savedOrderId && (
+            <>
+              <button
+                type="button"
+                onClick={() => navigate(`/compras?osId=${savedOrderId}`)}
+                className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-400"
+              >
+                Solicitar cotação
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  window.open(createBudgetLink(savedOrderId), "_blank", "noopener,noreferrer")
+                }
+                className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+              >
+                Enviar orçamento
+              </button>
+            </>
+          )}
 
           <button
             type="submit"

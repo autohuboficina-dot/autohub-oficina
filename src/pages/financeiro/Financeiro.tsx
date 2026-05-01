@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type { UserRole } from "../../accessControl";
-import { getCotacoes } from "../compras/comprasStorage";
-import { getStoredOrders } from "../os/osStorage";
+import { getCotacoes } from "../../services/cotacoesService";
+import { getStoredOrders } from "../../services/osService";
 import {
   deleteLancamento,
   getLancamentos,
@@ -14,7 +14,7 @@ import {
   type LancamentoFinanceiro,
   type LancamentoStatus,
   type LancamentoTipo,
-} from "./financeiroStorage";
+} from "../../services/financeiroService";
 
 type FinanceiroProps = {
   role: UserRole;
@@ -103,33 +103,47 @@ function syncAutomaticLancamentos() {
     .forEach((order) => {
       const baseDate =
         order.dataConfirmacaoOficina || order.dataDecisaoAprovacao || order.criadoEm;
-      const orderEntries = order.exigeEntrada
-        ? [
-            {
-              origemId: `${order.id}:entrada`,
-              descricao: `Entrada/sinal da ${order.id} - ${order.cliente}`,
-              valor: Number(order.entradaCalculada || 0),
-              status:
-                order.statusEntrada === "paga" ? ("Pago" as const) : ("Pendente" as const),
-              data: order.dataPagamentoEntrada || baseDate,
-            },
-            {
-              origemId: `${order.id}:saldo`,
-              descricao: `Saldo restante da ${order.id} - ${order.cliente}`,
-              valor: Number(order.saldoRestante || 0),
-              status: "Pendente" as const,
-              data: baseDate,
-            },
-          ]
-        : [
-            {
-              origemId: order.id,
-              descricao: `Receita prevista da ${order.id} - ${order.cliente}`,
-              valor: Number(order.orcamento.totalFinal || 0),
-              status: "Pendente" as const,
-              data: baseDate,
-            },
-          ];
+      const paymentTotal =
+        order.valorFinalPagamento ||
+        (order.exigeEntrada ? order.saldoRestante : order.orcamento.totalFinal);
+      const installments =
+        order.formaPagamentoEscolhida === "Crédito"
+          ? Math.max(order.parcelasEscolhidas || 1, 1)
+          : 1;
+      const saldoEntries = Array.from({ length: installments }, (_, index) => ({
+        origemId:
+          installments > 1
+            ? `${order.id}:saldo-${index + 1}`
+            : order.exigeEntrada
+              ? `${order.id}:saldo`
+              : order.id,
+        descricao:
+          installments > 1
+            ? `Parcela ${index + 1}/${installments} da ${order.id} - ${order.cliente}`
+            : order.exigeEntrada
+              ? `Saldo restante da ${order.id} - ${order.cliente}`
+              : `Receita prevista da ${order.id} - ${order.cliente}`,
+        valor: paymentTotal / installments,
+        status: "Pendente" as const,
+        data: baseDate,
+      }));
+      const orderEntries = [
+        ...(order.exigeEntrada
+          ? [
+              {
+                origemId: `${order.id}:entrada`,
+                descricao: `Entrada/sinal da ${order.id} - ${order.cliente}`,
+                valor: Number(order.entradaCalculada || 0),
+                status:
+                  order.statusEntrada === "paga"
+                    ? ("Pago" as const)
+                    : ("Pendente" as const),
+                data: order.dataPagamentoEntrada || baseDate,
+              },
+            ]
+          : []),
+        ...saldoEntries,
+      ];
 
       orderEntries
         .filter((entry) => entry.valor > 0)
@@ -149,7 +163,14 @@ function syncAutomaticLancamentos() {
             );
           const lancamentoData = {
             tipo: "Entrada" as const,
-            descricao: entry.descricao,
+            descricao: `${entry.descricao}${
+              order.descontoAplicado ||
+              order.descontoPagamentoAplicado ||
+              order.taxaAplicada ||
+              order.taxaPagamentoAplicada
+                ? ` (desconto ${formatCurrency(order.descontoAplicado || order.descontoPagamentoAplicado)}, taxa ${formatCurrency(order.taxaAplicada || order.taxaPagamentoAplicada)})`
+                : ""
+            }`,
             valor: entry.valor,
             data: entry.data,
             status:
@@ -256,7 +277,7 @@ function createMetrics(lancamentos: LancamentoFinanceiro[]): FinanceMetric[] {
       0,
     );
   const lucroEstimado = receitaAprovada - comprasConfirmadas - descontos;
-  const finalizedOrders = orders.filter((order) => order.status === "Finalizado");
+  const finalizedOrders = orders.filter((order) => order.status === "FINALIZADA");
   const approvedOrders = orders.filter(
     (order) => order.statusAprovacao === "confirmado_oficina",
   );
@@ -336,7 +357,7 @@ export default function Financeiro({ role }: FinanceiroProps) {
       getStoredOrders().filter(
         (order) => order.statusAprovacao === "confirmado_oficina" && order.exigeEntrada,
       ),
-    [lancamentos],
+    [],
   );
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";

@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import BackButton from "../../components/ui/BackButton";
+import { formatCpfCnpj, formatPhone } from "../../utils/formatters";
 import {
   getServiceOrderStatusBadgeClass,
+  getServiceOrderStatusLabel,
   getStoredOrders,
-} from "../os/osStorage";
-import { getClientes } from "./clientesStorage";
+} from "../../services/osService";
+import { getClientes } from "../../services/clientesService";
 
 function formatCurrency(value: number) {
   return value.toLocaleString("pt-BR", {
@@ -52,13 +55,7 @@ export default function ClienteDetail() {
   if (!cliente) {
     return (
       <div>
-        <button
-          type="button"
-          onClick={() => navigate("/clientes")}
-          className="mb-6 rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-        >
-          Voltar para clientes
-        </button>
+        <BackButton className="mb-6" />
 
         <section className={sectionClass}>
           <h2 className="text-3xl font-bold">Cliente não encontrado</h2>
@@ -72,7 +69,9 @@ export default function ClienteDetail() {
 
   return (
     <div className="max-w-7xl">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-6">
+        <BackButton className="mb-4" />
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-bold">{cliente.nome}</h2>
           <p className="mt-2 text-slate-400">
@@ -80,13 +79,7 @@ export default function ClienteDetail() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => navigate("/clientes")}
-          className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-        >
-          Voltar
-        </button>
+      </div>
       </div>
 
       <section className="mb-6 grid gap-4 md:grid-cols-3">
@@ -131,11 +124,13 @@ export default function ClienteDetail() {
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
             <span className="text-xs uppercase text-slate-500">Telefone</span>
-            <p className={dataValueClass}>{cliente.telefone || "-"}</p>
+            <p className={dataValueClass}>{formatPhone(cliente.telefone) || "-"}</p>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
             <span className="text-xs uppercase text-slate-500">CPF/CNPJ</span>
-            <p className={dataValueClass}>{cliente.documento || "-"}</p>
+            <p className={dataValueClass}>
+              {formatCpfCnpj(cliente.documento) || "-"}
+            </p>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
             <span className="text-xs uppercase text-slate-500">E-mail</span>
@@ -195,11 +190,13 @@ export default function ClienteDetail() {
             <tbody>
               {historicoOs.map((os) => (
                 <tr key={os.id} className="border-t border-slate-800">
-                  <td className="py-3 font-medium text-sky-300">{os.id}</td>
+                  <td className="py-3 font-medium text-sky-300">
+                    {os.codigo || os.id}
+                  </td>
                   <td className="text-slate-300">{os.veiculo || "-"}</td>
                   <td>
                     <span className={getServiceOrderStatusBadgeClass(os.status)}>
-                      {os.status}
+                      {getServiceOrderStatusLabel(os.status)}
                     </span>
                   </td>
                   <td className="text-slate-300">
@@ -209,7 +206,7 @@ export default function ClienteDetail() {
                   <td>
                     <button
                       type="button"
-                      onClick={() => navigate(`/os/${os.id}`)}
+                      onClick={() => navigate(`/os/${os.codigo || os.id}`)}
                       className="rounded bg-sky-500 px-3 py-1 text-xs text-white hover:bg-sky-400"
                     >
                       Ver OS

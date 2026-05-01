@@ -1,20 +1,26 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   getBudgetApprovalBadgeClass,
   getBudgetApprovalLabel,
   getServiceOrderStatusBadgeClass,
+  getServiceOrderStatusLabel,
+  getServiceOrderStorageError,
   getStoredOrders,
   type ServiceOrder,
-} from "./osStorage";
+} from "../../services/osService";
 
 export default function OSList() {
   const navigate = useNavigate();
-  const [ordens, setOrdens] = useState<ServiceOrder[]>([]);
+  const [ordens, setOrdens] = useState<ServiceOrder[]>(() => getStoredOrders());
+  const [storageError, setStorageError] = useState(() =>
+    getServiceOrderStorageError(),
+  );
 
-  useEffect(() => {
+  function reloadOrders() {
     setOrdens(getStoredOrders());
-  }, []);
+    setStorageError(getServiceOrderStorageError());
+  }
 
   return (
     <div>
@@ -28,6 +34,19 @@ export default function OSList() {
           Nova OS
         </button>
       </div>
+
+      {storageError && (
+        <div className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <p className="font-medium">{storageError}</p>
+          <button
+            type="button"
+            onClick={reloadOrders}
+            className="mt-3 rounded-lg border border-red-300/40 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/10"
+          >
+            Recarregar dados
+          </button>
+        </div>
+      )}
 
       <table className="w-full text-sm">
         <thead className="text-slate-400">
@@ -44,7 +63,9 @@ export default function OSList() {
         <tbody>
           {ordens.map((os) => (
             <tr key={os.id} className="border-t border-slate-800">
-              <td className="py-3 text-sky-400 font-medium">{os.id}</td>
+              <td className="py-3 text-sky-400 font-medium">
+                {os.codigo || os.id}
+              </td>
               <td>{os.cliente}</td>
               <td className="text-slate-300">
                 <span>{os.veiculo}</span>
@@ -52,7 +73,7 @@ export default function OSList() {
               </td>
               <td>
                 <span className={getServiceOrderStatusBadgeClass(os.status)}>
-                  {os.status}
+                  {getServiceOrderStatusLabel(os.status)}
                 </span>
               </td>
               <td>
@@ -62,7 +83,7 @@ export default function OSList() {
               </td>
               <td>
                 <button
-                  onClick={() => navigate(`/os/${os.id}`)}
+                  onClick={() => navigate(`/os/${os.codigo || os.id}`)}
                   className="bg-sky-500 px-3 py-1 rounded text-white hover:bg-sky-400"
                 >
                   Ver detalhes

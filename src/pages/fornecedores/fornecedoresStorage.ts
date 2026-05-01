@@ -23,7 +23,7 @@ export type Fornecedor = {
 const STORAGE_KEY = "autohub:fornecedores";
 
 function createFornecedorId() {
-  return `FOR-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return createSecureId("FOR");
 }
 
 function normalizeCategoria(categoria: string): FornecedorCategoria {
@@ -105,3 +105,4 @@ export function deleteFornecedor(fornecedorId: string) {
     getFornecedores().filter((fornecedor) => fornecedor.id !== fornecedorId),
   );
 }
+import { createSecureId } from "../../utils/ids";

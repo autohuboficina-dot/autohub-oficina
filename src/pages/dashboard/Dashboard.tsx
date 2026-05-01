@@ -1,8 +1,8 @@
 import { ROLE_LABELS, type UserRole } from "../../accessControl";
-import { getClientes } from "../clientes/clientesStorage";
-import { getCotacoes } from "../compras/comprasStorage";
-import { getEstoque } from "../estoque/estoqueStorage";
-import { getStoredOrders } from "../os/osStorage";
+import { getClientes } from "../../services/clientesService";
+import { getCotacoes } from "../../services/cotacoesService";
+import { getEstoque } from "../../services/estoqueService";
+import { getStoredOrders } from "../../services/osService";
 
 type DashboardProps = {
   role: UserRole;
@@ -53,12 +53,12 @@ function createMetrics(role: UserRole): MetricCard[] {
   const cotacoes = getCotacoes();
   const estoque = getEstoque();
   const openOrders = orders.filter(
-    (order) => order.status !== "Finalizado" && order.status !== "Cancelado",
+    (order) => order.status !== "FINALIZADA" && order.status !== "CANCELADA",
   );
   const pendingBudgets = orders.filter(
     (order) =>
       order.statusAprovacao === "pendente" ||
-      order.status === "Aguardando aprovação",
+      order.status === "AGUARDANDO_APROVACAO",
   );
   const receitaEstimada = orders.reduce(
     (total, order) => total + Number(order.orcamento.totalFinal || 0),
@@ -78,7 +78,7 @@ function createMetrics(role: UserRole): MetricCard[] {
   );
   const followUps = orders.filter(
     (order) =>
-      order.status === "Aguardando aprovação" ||
+      order.status === "AGUARDANDO_APROVACAO" ||
       order.statusAprovacao === "pendente",
   );
 
@@ -93,7 +93,7 @@ function createMetrics(role: UserRole): MetricCard[] {
       {
         label: "Em diagnóstico",
         value: String(
-          orders.filter((order) => order.status === "Em diagnóstico").length,
+          orders.filter((order) => order.status === "EM_DIAGNOSTICO").length,
         ),
         hint: "Aguardando avaliação técnica",
         tone: "violet",
@@ -101,7 +101,7 @@ function createMetrics(role: UserRole): MetricCard[] {
       {
         label: "Aguardando peça",
         value: String(
-          orders.filter((order) => order.status === "Aguardando peça").length,
+          orders.filter((order) => order.status === "AGUARDANDO_PECA").length,
         ),
         hint: "Dependem de compras/estoque",
         tone: "amber",
@@ -109,7 +109,7 @@ function createMetrics(role: UserRole): MetricCard[] {
       {
         label: "Em execução",
         value: String(
-          orders.filter((order) => order.status === "Em execução").length,
+          orders.filter((order) => order.status === "EM_EXECUCAO").length,
         ),
         hint: "Serviços em andamento",
         tone: "emerald",
@@ -146,7 +146,7 @@ function createMetrics(role: UserRole): MetricCard[] {
       {
         label: "OS aguardando aprovação",
         value: String(
-          orders.filter((order) => order.status === "Aguardando aprovação")
+          orders.filter((order) => order.status === "AGUARDANDO_APROVACAO")
             .length,
         ),
         hint: "Prioridade do atendimento",
@@ -217,7 +217,7 @@ function createMetrics(role: UserRole): MetricCard[] {
       {
         label: "OS finalizadas",
         value: String(
-          orders.filter((order) => order.status === "Finalizado").length,
+          orders.filter((order) => order.status === "FINALIZADA").length,
         ),
         hint: "Serviços encerrados",
         tone: "sky",

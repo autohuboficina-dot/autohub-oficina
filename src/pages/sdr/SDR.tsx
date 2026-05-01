@@ -1,14 +1,11 @@
 import { useMemo, useState } from "react";
-import { getClientes, type Cliente } from "../clientes/clientesStorage";
-import { getConfiguracoesOficina } from "../configuracoes/configuracoesStorage";
-import { getStoredOrders, type ServiceOrder } from "../os/osStorage";
+import { formatPhone, onlyDigits } from "../../utils/formatters";
+import { getClientes, type Cliente } from "../../services/clientesService";
+import { getConfiguracoesOficina } from "../../services/configuracoesService";
+import { getStoredOrders, type ServiceOrder } from "../../services/osService";
 
 const RECENT_OS_LIMIT = 5;
 const OLD_OS_DAYS = 90;
-
-function onlyDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
 
 function getWhatsAppPhone(value: string) {
   const digits = onlyDigits(value);
@@ -98,7 +95,7 @@ export default function SDR() {
 
   const sortedOrders = useMemo(() => sortOrdersByDate(orders), [orders]);
   const pendingBudgets = useMemo(
-    () => sortedOrders.filter((order) => order.status === "Aguardando aprovação"),
+    () => sortedOrders.filter((order) => order.status === "AGUARDANDO_APROVACAO"),
     [sortedOrders],
   );
   const clientsWithoutReturn = useMemo(() => {
@@ -257,7 +254,8 @@ export default function SDR() {
                 >
                   <h4 className="font-semibold text-slate-100">{cliente.nome}</h4>
                   <p className="mt-1 text-sm text-slate-400">
-                    {cliente.telefone || "Sem telefone"} · {cliente.cidade || "Cidade não informada"}
+                    {formatPhone(cliente.telefone) || "Sem telefone"} ·{" "}
+                    {cliente.cidade || "Cidade não informada"}
                   </p>
                   <p className="mt-3 text-sm text-slate-500">
                     {cliente.quantidadeVeiculos} veículo(s) cadastrado(s)

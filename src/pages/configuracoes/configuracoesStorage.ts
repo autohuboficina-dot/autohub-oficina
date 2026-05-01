@@ -11,6 +11,24 @@ export type OficinaConfiguracoes = {
   chavePix: string;
   textoPadraoOrcamento: string;
   politicaEntradaSinal: string;
+  regrasPagamento: RegrasPagamento;
+};
+
+export type DescontoPagamento = {
+  tipo: "percentual" | "valor";
+  valor: number;
+};
+
+export type RegrasPagamento = {
+  pix: DescontoPagamento;
+  dinheiro: DescontoPagamento;
+  debito: DescontoPagamento;
+  credito: {
+    maxParcelas: number;
+    parcelasSemJuros: number;
+    taxaParcelamentoPercentual: number;
+    repassarTaxaCliente: boolean;
+  };
 };
 
 export type UsuarioStatus = "ativo" | "inativo";
@@ -41,16 +59,136 @@ export const defaultOficinaConfiguracoes: OficinaConfiguracoes = {
     "Revise os itens do orçamento e responda pelo link enviado pela oficina.",
   politicaEntradaSinal:
     "Quando houver entrada/sinal, o serviço só será iniciado após confirmação do pagamento.",
+  regrasPagamento: {
+    pix: { tipo: "percentual", valor: 0 },
+    dinheiro: { tipo: "percentual", valor: 0 },
+    debito: { tipo: "percentual", valor: 0 },
+    credito: {
+      maxParcelas: 12,
+      parcelasSemJuros: 3,
+      taxaParcelamentoPercentual: 0,
+      repassarTaxaCliente: false,
+    },
+  },
 };
 
 function createUsuarioId() {
-  return `USR-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return createSecureId("USR");
 }
 
 function normalizeConfig(config: Partial<OficinaConfiguracoes>): OficinaConfiguracoes {
+  const regrasPagamento = config.regrasPagamento ?? defaultOficinaConfiguracoes.regrasPagamento;
+
   return {
     ...defaultOficinaConfiguracoes,
     ...config,
+    regrasPagamento: {
+      pix: {
+        tipo: regrasPagamento.pix?.tipo === "valor" ? "valor" : "percentual",
+        valor: Number(regrasPagamento.pix?.valor || 0),
+      },
+      dinheiro: {
+        tipo:
+          regrasPagamento.dinheiro?.tipo === "valor" ? "valor" : "percentual",
+        valor: Number(regrasPagamento.dinheiro?.valor || 0),
+      },
+      debito: {
+        tipo: regrasPagamento.debito?.tipo === "valor" ? "valor" : "percentual",
+        valor: Number(regrasPagamento.debito?.valor || 0),
+      },
+      credito: {
+        maxParcelas: Math.max(Number(regrasPagamento.credito?.maxParcelas || 1), 1),
+        parcelasSemJuros: Math.max(
+          Number(regrasPagamento.credito?.parcelasSemJuros || 1),
+          1,
+        ),
+        taxaParcelamentoPercentual: Number(
+          regrasPagamento.credito?.taxaParcelamentoPercentual || 0,
+        ),
+        repassarTaxaCliente: Boolean(
+          regrasPagamento.credito?.repassarTaxaCliente,
+        ),
+      },
+    },
+  };
+}
+
+function calculateDiscount(baseValue: number, rule: DescontoPagamento) {
+  if (rule.tipo === "percentual") {
+    return (baseValue * Math.min(Math.max(rule.valor, 0), 100)) / 100;
+  }
+
+  return Math.min(Math.max(rule.valor, 0), baseValue);
+}
+
+export function calculatePaymentSimulation(
+  totalOrcamento: number,
+  entradaCalculada: number,
+  exigeEntrada: boolean,
+  regras: RegrasPagamento,
+  forma: "Pix" | "Dinheiro" | "Débito" | "Crédito",
+  parcelas = 1,
+) {
+  const saldoBase = Math.max(
+    Number(totalOrcamento || 0) - (exigeEntrada ? Number(entradaCalculada || 0) : 0),
+    0,
+  );
+  const selectedInstallments = Math.min(
+    Math.max(Number(parcelas || 1), 1),
+    Math.max(regras.credito.maxParcelas, 1),
+  );
+
+  if (forma === "Pix") {
+    const descontoAplicado = calculateDiscount(saldoBase, regras.pix);
+    return {
+      saldoBase,
+      descontoAplicado,
+      taxaAplicada: 0,
+      valorFinalPagamento: Math.max(saldoBase - descontoAplicado, 0),
+      parcelas: 1,
+      valorParcela: Math.max(saldoBase - descontoAplicado, 0),
+    };
+  }
+
+  if (forma === "Dinheiro") {
+    const descontoAplicado = calculateDiscount(saldoBase, regras.dinheiro);
+    return {
+      saldoBase,
+      descontoAplicado,
+      taxaAplicada: 0,
+      valorFinalPagamento: Math.max(saldoBase - descontoAplicado, 0),
+      parcelas: 1,
+      valorParcela: Math.max(saldoBase - descontoAplicado, 0),
+    };
+  }
+
+  if (forma === "Débito") {
+    const descontoAplicado = calculateDiscount(saldoBase, regras.debito);
+    return {
+      saldoBase,
+      descontoAplicado,
+      taxaAplicada: 0,
+      valorFinalPagamento: Math.max(saldoBase - descontoAplicado, 0),
+      parcelas: 1,
+      valorParcela: Math.max(saldoBase - descontoAplicado, 0),
+    };
+  }
+
+  const shouldChargeInterest =
+    regras.credito.repassarTaxaCliente &&
+    selectedInstallments > regras.credito.parcelasSemJuros;
+  const taxaAplicada = shouldChargeInterest
+    ? (saldoBase * Math.max(regras.credito.taxaParcelamentoPercentual, 0)) / 100
+    : 0;
+  const valorFinalPagamento = saldoBase + taxaAplicada;
+
+  return {
+    saldoBase,
+    descontoAplicado: 0,
+    taxaAplicada,
+    valorFinalPagamento,
+    parcelas: selectedInstallments,
+    valorParcela: selectedInstallments > 0 ? valorFinalPagamento / selectedInstallments : 0,
   };
 }
 
@@ -151,3 +289,4 @@ export function deleteUsuario(usuarioId: string) {
   saveUsuarios(updatedUsuarios);
   return updatedUsuarios;
 }
+import { createSecureId } from "../../utils/ids";

@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   FORNECEDOR_CATEGORIAS,
   deleteFornecedor,
@@ -7,7 +8,7 @@ import {
   updateFornecedor,
   type Fornecedor,
   type FornecedorCategoria,
-} from "./fornecedoresStorage";
+} from "../../services/fornecedoresService";
 
 type FornecedorFormState = {
   nome: string;
@@ -22,24 +23,6 @@ const initialFormState: FornecedorFormState = {
   categoria: "Peças",
   observacoes: "",
 };
-
-function onlyDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
-
-function formatPhone(value: string) {
-  const digits = onlyDigits(value).slice(0, 11);
-
-  if (digits.length <= 2) {
-    return digits ? `(${digits}` : "";
-  }
-
-  if (digits.length <= 7) {
-    return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  }
-
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-}
 
 export default function Fornecedores() {
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>(() =>
@@ -97,18 +80,18 @@ export default function Fornecedores() {
         return;
       }
 
-      updateFornecedor({
-        ...currentFornecedor,
-        nome: formState.nome.trim(),
-        whatsapp: formState.whatsapp.trim(),
-        categoria: formState.categoria,
-        observacoes: formState.observacoes.trim(),
-      });
+        updateFornecedor({
+          ...currentFornecedor,
+          nome: formState.nome.trim(),
+          whatsapp: onlyDigits(formState.whatsapp),
+          categoria: formState.categoria,
+          observacoes: formState.observacoes.trim(),
+        });
       setFeedback("Fornecedor atualizado.");
     } else {
       saveFornecedor({
         nome: formState.nome.trim(),
-        whatsapp: formState.whatsapp.trim(),
+        whatsapp: onlyDigits(formState.whatsapp),
         categoria: formState.categoria,
         observacoes: formState.observacoes.trim(),
       });
@@ -123,7 +106,7 @@ export default function Fornecedores() {
     setEditingFornecedorId(fornecedor.id);
     setFormState({
       nome: fornecedor.nome,
-      whatsapp: fornecedor.whatsapp,
+      whatsapp: formatPhone(fornecedor.whatsapp),
       categoria: fornecedor.categoria,
       observacoes: fornecedor.observacoes,
     });
@@ -291,7 +274,7 @@ export default function Fornecedores() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-300">
-                      {fornecedor.whatsapp || "-"}
+                      {formatPhone(fornecedor.whatsapp) || "-"}
                     </td>
                     <td className="px-4 py-3">
                       <span className="rounded-full bg-slate-800 px-2 py-1 text-xs text-slate-200">

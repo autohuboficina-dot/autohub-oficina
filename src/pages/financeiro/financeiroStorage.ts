@@ -31,7 +31,7 @@ export type LancamentoFinanceiro = {
 const STORAGE_KEY = "autohub:financeiro-lancamentos";
 
 function createLancamentoId() {
-  return `FIN-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return createSecureId("FIN");
 }
 
 function normalizeTipo(tipo: string): LancamentoTipo {
@@ -144,3 +144,4 @@ export function deleteLancamento(lancamentoId: string) {
   saveLancamentos(updatedLancamentos);
   return updatedLancamentos;
 }
+import { createSecureId } from "../../utils/ids";

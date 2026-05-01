@@ -30,11 +30,11 @@ export type Cliente = {
 const STORAGE_KEY = "autohub:clientes";
 
 export function createClienteVeiculoId() {
-  return `VEI-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return createSecureId("VEI");
 }
 
 function createClienteId() {
-  return `CLI-${Date.now()}`;
+  return createSecureId("CLI");
 }
 
 function normalizeCliente(cliente: Cliente): Cliente {
@@ -108,3 +108,4 @@ export function updateCliente(cliente: Cliente) {
 export function deleteCliente(clienteId: string) {
   saveClientes(getClientes().filter((cliente) => cliente.id !== clienteId));
 }
+import { createSecureId } from "../../utils/ids";

@@ -1,27 +1,42 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { getClientes, type Cliente } from "../clientes/clientesStorage";
+import BackButton from "../../components/ui/BackButton";
+import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
+import { getClientes, type Cliente } from "../../services/clientesService";
 import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
+  calculatePaymentSimulation,
+  getConfiguracoesOficina,
+} from "../../services/configuracoesService";
+import {
   SERVICE_ORDER_STATUSES,
+  appendServiceOrderTimelineEvent,
   getBudgetApprovalBadgeClass,
   getBudgetApprovalLabel,
+  getServiceOrderStatusLabel,
   getServiceOrderStatusForBudgetDecision,
   getServiceOrderStatusBadgeClass,
   getStoredOrders,
+  isServiceOrderBudgetLocked,
   saveStoredOrders,
+  updateServiceOrderStatusWithTimeline,
   type BudgetApprovalStatus,
   type ChecklistStatus,
   type ServiceOrder,
+  type ServiceOrderPhoto,
   type ServiceOrderStatus,
-} from "./osStorage";
-import { getCotacoes, saveCotacao, updateCotacao } from "../compras/comprasStorage";
+} from "../../services/osService";
+import {
+  getCotacoes,
+  saveCotacao,
+  updateCotacao,
+} from "../../services/cotacoesService";
 import {
   getFornecedores,
   type Fornecedor,
-} from "../fornecedores/fornecedoresStorage";
-import { registrarSaidaEstoque } from "../estoque/estoqueStorage";
-import { getConfiguracoesOficina } from "../configuracoes/configuracoesStorage";
+} from "../../services/fornecedoresService";
+import { registrarSaidaEstoque } from "../../services/estoqueService";
+import ServiceOrderPhotosSection from "./ServiceOrderPhotosSection";
 
 const checklistItems = [
   "Freio",
@@ -38,7 +53,33 @@ type PartLine = {
   quantity: string;
   unitValue: string;
   compraId?: string;
+  generatedFromChecklist?: string;
 };
+
+function getBudgetEditSnapshot(
+  parts: PartLine[],
+  labor: LaborLine[],
+  discountValue: string,
+  discountType: "money" | "percent",
+) {
+  return JSON.stringify({
+    parts: parts.map((part) => ({
+      id: part.id,
+      name: part.name.trim(),
+      quantity: toNumber(part.quantity),
+      unitValue: toNumber(part.unitValue),
+      compraId: part.compraId || "",
+    })),
+    labor: labor.map((line) => ({
+      id: line.id,
+      service: line.service.trim(),
+      description: line.description.trim(),
+      value: toNumber(line.value),
+    })),
+    discountValue: toNumber(discountValue),
+    discountType,
+  });
+}
 
 type LaborLine = {
   id: number;
@@ -61,7 +102,7 @@ type QuoteFormState = {
   quantidade: string;
   urgencia: "Normal" | "Urgente";
   observacao: string;
-  fotos: string[];
+  fotos: ServiceOrderPhoto[];
 };
 
 const initialQuoteFormState: QuoteFormState = {
@@ -72,73 +113,6 @@ const initialQuoteFormState: QuoteFormState = {
   observacao: "",
   fotos: [],
 };
-
-function onlyDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
-
-function formatPhone(value: string) {
-  const digits = onlyDigits(value).slice(0, 11);
-
-  if (digits.length <= 2) {
-    return digits ? `(${digits}` : "";
-  }
-
-  if (digits.length <= 7) {
-    return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  }
-
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-}
-
-function formatCpf(value: string) {
-  const digits = onlyDigits(value).slice(0, 11);
-
-  if (digits.length <= 3) {
-    return digits;
-  }
-
-  if (digits.length <= 6) {
-    return `${digits.slice(0, 3)}.${digits.slice(3)}`;
-  }
-
-  if (digits.length <= 9) {
-    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-  }
-
-  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(
-    6,
-    9,
-  )}-${digits.slice(9)}`;
-}
-
-function formatCnpj(value: string) {
-  const digits = onlyDigits(value).slice(0, 14);
-
-  if (digits.length <= 2) {
-    return digits;
-  }
-
-  if (digits.length <= 5) {
-    return `${digits.slice(0, 2)}.${digits.slice(2)}`;
-  }
-
-  if (digits.length <= 8) {
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
-  }
-
-  if (digits.length <= 12) {
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
-      5,
-      8,
-    )}/${digits.slice(8)}`;
-  }
-
-  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
-    5,
-    8,
-  )}/${digits.slice(8, 12)}-${digits.slice(12)}`;
-}
 
 function toNumber(value: string) {
   return Number(value || 0);
@@ -243,11 +217,12 @@ function createPartLines(order?: ServiceOrder): PartLine[] {
     quantity: String(part.quantidade),
     unitValue: String(part.valorUnitario),
     compraId: part.compraId,
+    generatedFromChecklist: part.origemChecklist,
   }));
 }
 
 function registerStockExitForOrder(order: ServiceOrder) {
-  if (order.status !== "Finalizado") {
+  if (order.status !== "FINALIZADA") {
     return;
   }
 
@@ -294,10 +269,14 @@ export default function OSDetail() {
     order?.clienteDados.nome || order?.cliente || "",
   );
   const [clientPhone, setClientPhone] = useState(
-    order?.clienteDados.telefone || order?.telefone || "",
+    formatPhone(order?.clienteDados.telefone || order?.telefone || ""),
   );
-  const [clientCpf, setClientCpf] = useState(order?.clienteDados.cpf || "");
-  const [clientCnpj, setClientCnpj] = useState(order?.clienteDados.cnpj || "");
+  const [clientCpf, setClientCpf] = useState(
+    formatCpfCnpj(order?.clienteDados.cpf || ""),
+  );
+  const [clientCnpj, setClientCnpj] = useState(
+    formatCpfCnpj(order?.clienteDados.cnpj || ""),
+  );
   const [clientEmail, setClientEmail] = useState(order?.clienteDados.email || "");
   const [selectedClienteId, setSelectedClienteId] = useState(order?.clienteId || "");
   const [selectedVehicleId, setSelectedVehicleId] = useState(order?.veiculoId || "");
@@ -316,7 +295,7 @@ export default function OSDetail() {
   );
   const [vehicleKm, setVehicleKm] = useState(order?.veiculoDados.kmAtual || "");
   const [status, setStatus] = useState<ServiceOrderStatus>(
-    order?.status || "Em diagnóstico",
+    order?.status || "ABERTA",
   );
   const [approvalStatus, setApprovalStatus] = useState<BudgetApprovalStatus>(
     order?.statusAprovacao || "pendente",
@@ -354,6 +333,12 @@ export default function OSDetail() {
   const [laborLines, setLaborLines] = useState<LaborLine[]>(() =>
     createLaborLines(order),
   );
+  const [photos, setPhotos] = useState<ServiceOrderPhoto[]>(
+    () => order?.fotosOs || [],
+  );
+  const [timeline, setTimeline] = useState(() => order?.timeline || []);
+  const [loadedUpdatedAt, setLoadedUpdatedAt] = useState(order?.updatedAt || "");
+  const [loadedVersion, setLoadedVersion] = useState(order?.version || 0);
   const [discountValue, setDiscountValue] = useState(
     order ? String(order.orcamento.descontoValor) : "",
   );
@@ -482,6 +467,86 @@ export default function OSDetail() {
       saldoRestante: Math.max(totals.finalTotal - safeEntrada, 0),
     };
   }, [depositPercent, depositType, depositValue, requiresDeposit, totals.finalTotal]);
+  const paymentOptions = useMemo(() => {
+    const regras = oficinaConfig.regrasPagamento;
+    const baseArgs = [
+      totals.finalTotal,
+      depositSummary.entradaCalculada,
+      requiresDeposit,
+      regras,
+    ] as const;
+
+    return {
+      pix: calculatePaymentSimulation(...baseArgs, "Pix"),
+      dinheiro: calculatePaymentSimulation(...baseArgs, "Dinheiro"),
+      debito: calculatePaymentSimulation(...baseArgs, "Débito"),
+      credito: Array.from({ length: regras.credito.maxParcelas }, (_, index) =>
+        calculatePaymentSimulation(...baseArgs, "Crédito", index + 1),
+      ),
+    };
+  }, [depositSummary.entradaCalculada, oficinaConfig.regrasPagamento, requiresDeposit, totals.finalTotal]);
+  const supplierVisiblePhotos = useMemo(
+    () =>
+      photos.filter(
+        (photo) =>
+          photo.visibilidade === "Fornecedor" || photo.visibilidade === "Ambos",
+      ),
+    [photos],
+  );
+  const initialBudgetSnapshot = useMemo(
+    () =>
+      order
+        ? getBudgetEditSnapshot(
+            createPartLines(order),
+            createLaborLines(order),
+            String(order.orcamento.descontoValor || ""),
+            order.orcamento.descontoTipo,
+          )
+        : "",
+    [order],
+  );
+
+  function hasConcurrentOrderChange() {
+    if (!order) {
+      return false;
+    }
+
+    const currentOrder = getStoredOrders().find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+
+    return Boolean(
+      currentOrder?.updatedAt &&
+        loadedUpdatedAt &&
+        (currentOrder.updatedAt !== loadedUpdatedAt ||
+          currentOrder.version !== loadedVersion),
+    );
+  }
+
+  function syncLoadedVersion(updatedOrder?: ServiceOrder) {
+    if (!updatedOrder) {
+      return;
+    }
+
+    setLoadedUpdatedAt(updatedOrder.updatedAt || new Date().toISOString());
+    setLoadedVersion(updatedOrder.version || 0);
+    setTimeline(updatedOrder.timeline);
+  }
+
+  function hasLockedBudgetChanges() {
+    if (!order || !isServiceOrderBudgetLocked(order.status)) {
+      return false;
+    }
+
+    const currentSnapshot = getBudgetEditSnapshot(
+      partLines,
+      laborLines,
+      discountValue,
+      discountType,
+    );
+
+    return currentSnapshot !== initialBudgetSnapshot;
+  }
 
   function addPartLine() {
     setPartLines((lines) => [
@@ -532,6 +597,7 @@ export default function OSDetail() {
   }
 
   function updateChecklistStatus(item: string, itemStatus: ChecklistStatus) {
+    const observacaoTecnica = checklistState[item]?.observacaoTecnica ?? "";
     setChecklistState((currentState) => ({
       ...currentState,
       [item]: {
@@ -539,9 +605,11 @@ export default function OSDetail() {
         status: itemStatus,
       },
     }));
+    syncChecklistSuggestion(item, itemStatus, observacaoTecnica);
   }
 
   function updateChecklistObservation(item: string, observacaoTecnica: string) {
+    const itemStatus = checklistState[item]?.status ?? "";
     setChecklistState((currentState) => ({
       ...currentState,
       [item]: {
@@ -549,6 +617,44 @@ export default function OSDetail() {
         observacaoTecnica,
       },
     }));
+    syncChecklistSuggestion(item, itemStatus, observacaoTecnica);
+  }
+
+  function syncChecklistSuggestion(
+    item: string,
+    itemStatus: ChecklistStatus,
+    observacaoTecnica: string,
+  ) {
+    if (itemStatus !== "Trocar" || !observacaoTecnica.trim()) {
+      return;
+    }
+
+    setPartLines((lines) => {
+      if (
+        lines.some(
+          (line) =>
+            line.generatedFromChecklist === item ||
+            line.name.toLowerCase().includes(item.toLowerCase()),
+        )
+      ) {
+        return lines;
+      }
+
+      return [
+        ...lines,
+        {
+          id: Math.max(0, ...lines.map((line) => line.id)) + 1,
+          name: `${item}: ${observacaoTecnica.trim()}`,
+          quantity: "1",
+          unitValue: "0",
+          generatedFromChecklist: item,
+        },
+      ];
+    });
+  }
+
+  function removePartLine(lineId: number) {
+    setPartLines((lines) => lines.filter((line) => line.id !== lineId));
   }
 
   function handleSelectCliente(clienteId: string) {
@@ -558,10 +664,14 @@ export default function OSDetail() {
     setSelectedClienteId(clienteId);
     setSelectedVehicleId("");
     setClientName(cliente?.nome || "");
-    setClientPhone(cliente?.telefone || "");
+    setClientPhone(formatPhone(cliente?.telefone || ""));
     setClientEmail(cliente?.email || "");
-    setClientCpf(documentDigits.length <= 11 ? cliente?.documento || "" : "");
-    setClientCnpj(documentDigits.length > 11 ? cliente?.documento || "" : "");
+    setClientCpf(
+      documentDigits.length <= 11 ? formatCpfCnpj(cliente?.documento || "") : "",
+    );
+    setClientCnpj(
+      documentDigits.length > 11 ? formatCpfCnpj(cliente?.documento || "") : "",
+    );
   }
 
   function handleSelectVehicle(vehicleId: string) {
@@ -586,9 +696,21 @@ export default function OSDetail() {
       return;
     }
 
+    if (hasConcurrentOrderChange()) {
+      setSaveMessage(
+        "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
+      );
+      return;
+    }
+
     const updatedOrders = getStoredOrders().map((storedOrder) =>
       storedOrder.id === order.id
-        ? { ...storedOrder, status: nextStatus }
+        ? updateServiceOrderStatusWithTimeline(storedOrder, nextStatus, {
+            tipo: "status",
+            titulo: "Status alterado",
+            descricao: `Status alterado para ${getServiceOrderStatusLabel(nextStatus)}.`,
+            usuarioResponsavel: "Oficina",
+          })
         : storedOrder,
     );
     saveStoredOrders(updatedOrders);
@@ -597,14 +719,64 @@ export default function OSDetail() {
     );
 
     if (updatedOrder) {
+      syncLoadedVersion(updatedOrder);
       registerStockExitForOrder(updatedOrder);
     }
 
     setSaveMessage("Status atualizado.");
   }
 
+  function handleManualStatusAction(
+    nextStatus: ServiceOrderStatus,
+    titulo: string,
+    descricao: string,
+    tipo = "acao_manual",
+  ) {
+    setStatus(nextStatus);
+
+    if (!order) {
+      return;
+    }
+
+    if (hasConcurrentOrderChange()) {
+      setSaveMessage(
+        "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
+      );
+      return;
+    }
+
+    const updatedOrders = getStoredOrders().map((storedOrder) =>
+      storedOrder.id === order.id
+        ? updateServiceOrderStatusWithTimeline(storedOrder, nextStatus, {
+            tipo,
+            titulo,
+            descricao,
+            usuarioResponsavel: "Oficina",
+          })
+        : storedOrder,
+    );
+    saveStoredOrders(updatedOrders);
+    const updatedOrder = updatedOrders.find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+
+    if (updatedOrder) {
+      syncLoadedVersion(updatedOrder);
+      registerStockExitForOrder(updatedOrder);
+    }
+
+    setSaveMessage(descricao || titulo);
+  }
+
   function handleConfirmClientApproval() {
     if (!order || !isPreApproved) {
+      return;
+    }
+
+    if (hasConcurrentOrderChange()) {
+      setSaveMessage(
+        "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
+      );
       return;
     }
 
@@ -629,19 +801,27 @@ export default function OSDetail() {
         statusEntrada: requiresDeposit ? depositStatus === "paga" ? "paga" as const : "pendente" as const : "nao_exige" as const,
       };
 
-      return {
-        ...updatedOrder,
-        status: getServiceOrderStatusForBudgetDecision(
+      return updateServiceOrderStatusWithTimeline(
+        updatedOrder,
+        getServiceOrderStatusForBudgetDecision(
           updatedOrder,
           "confirmado_oficina",
         ),
-      };
+        {
+          tipo: "aprovacao_confirmada",
+          titulo: "Aprovação confirmada pela oficina",
+          descricao:
+            "Oficina confirmou a autorização com o cliente antes de iniciar.",
+          usuarioResponsavel: "Oficina",
+        },
+      );
     });
     const updatedOrder = updatedOrders.find(
       (storedOrder) => storedOrder.id === order.id,
     );
 
     if (updatedOrder) {
+      syncLoadedVersion(updatedOrder);
       const cotacoes = getCotacoes();
       updatedOrder.pecasNecessarias
         .filter((part) => part.compraId)
@@ -682,27 +862,41 @@ export default function OSDetail() {
     const dataPagamentoEntrada = new Date().toISOString();
     const updatedOrders = getStoredOrders().map((storedOrder) =>
       storedOrder.id === order.id
-        ? {
-            ...storedOrder,
-            exigeEntrada: true,
-            tipoEntrada: depositType,
-            valorEntrada: toNumber(depositValue),
-            percentualEntrada: toNumber(depositPercent),
-            entradaCalculada: depositSummary.entradaCalculada,
-            saldoRestante: depositSummary.saldoRestante,
-            statusEntrada: "paga" as const,
-            dataPagamentoEntrada,
-            valorEntradaPago: depositSummary.entradaCalculada,
-            status: "Liberado para execução" as const,
-          }
+        ? updateServiceOrderStatusWithTimeline(
+            {
+              ...storedOrder,
+              exigeEntrada: true,
+              tipoEntrada: depositType,
+              valorEntrada: toNumber(depositValue),
+              percentualEntrada: toNumber(depositPercent),
+              entradaCalculada: depositSummary.entradaCalculada,
+              saldoRestante: depositSummary.saldoRestante,
+              statusEntrada: "paga" as const,
+              dataPagamentoEntrada,
+              valorEntradaPago: depositSummary.entradaCalculada,
+            },
+            "APROVADA",
+            {
+              tipo: "entrada_paga",
+              titulo: "Entrada recebida",
+              descricao: "Pagamento de entrada confirmado pela oficina.",
+              usuarioResponsavel: "Oficina",
+            },
+          )
         : storedOrder,
     );
 
     saveStoredOrders(updatedOrders);
+    const updatedOrder = updatedOrders.find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+    if (updatedOrder) {
+      syncLoadedVersion(updatedOrder);
+    }
     setDepositStatus("paga");
     setDepositPaymentDate(dataPagamentoEntrada);
     setDepositPaidValue(depositSummary.entradaCalculada);
-    setStatus("Liberado para execução");
+    setStatus("APROVADA");
     setSaveMessage("Recebimento da entrada confirmado.");
   }
 
@@ -717,8 +911,10 @@ export default function OSDetail() {
       }
 
       await navigator.clipboard.writeText(budgetLink);
+      registerBudgetSent("Link do orçamento copiado para envio ao cliente.");
       setSaveMessage(`Link copiado: ${budgetLink}`);
     } catch {
+      registerBudgetSent("Link do orçamento exibido para envio ao cliente.");
       setSaveMessage(`Link do orçamento: ${budgetLink}`);
     }
   }
@@ -730,7 +926,47 @@ export default function OSDetail() {
     }
 
     window.open(budgetWhatsappUrl, "_blank", "noopener,noreferrer");
+    registerBudgetSent("Orçamento enviado ao cliente pelo WhatsApp.");
     setSaveMessage("WhatsApp aberto com a mensagem do orçamento.");
+  }
+
+  function registerBudgetSent(descricao: string) {
+    if (!order) {
+      return;
+    }
+
+    const updatedOrders = getStoredOrders().map((storedOrder) => {
+      if (storedOrder.id !== order.id) {
+        return storedOrder;
+      }
+
+      return updateServiceOrderStatusWithTimeline(
+        appendServiceOrderTimelineEvent(storedOrder, {
+          tipo: "orcamento_enviado",
+          titulo: "Orçamento enviado ao cliente",
+          descricao,
+          usuarioResponsavel: "Atendimento",
+          statusAnterior: storedOrder.status,
+          statusNovo: "ORCAMENTO_ENVIADO",
+        }),
+        "AGUARDANDO_APROVACAO",
+        {
+          tipo: "status",
+          titulo: "Aguardando aprovação",
+          descricao: "OS ficou aguardando resposta do cliente.",
+          usuarioResponsavel: "Sistema",
+        },
+      );
+    });
+
+    saveStoredOrders(updatedOrders);
+    const updatedOrder = updatedOrders.find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+    if (updatedOrder) {
+      syncLoadedVersion(updatedOrder);
+    }
+    setStatus("AGUARDANDO_APROVACAO");
   }
 
   function resetQuoteForm() {
@@ -742,6 +978,24 @@ export default function OSDetail() {
       return;
     }
 
+    const updatedOrders = getStoredOrders().map((storedOrder) =>
+      storedOrder.id === order.id
+        ? updateServiceOrderStatusWithTimeline(storedOrder, "AGUARDANDO_COTACAO", {
+            tipo: "cotacao_solicitada",
+            titulo: "Cotação solicitada",
+            descricao: "Oficina iniciou a solicitação de cotação de peças.",
+            usuarioResponsavel: "Compras",
+          })
+        : storedOrder,
+    );
+    saveStoredOrders(updatedOrders);
+    setStatus("AGUARDANDO_COTACAO");
+    const updatedOrder = updatedOrders.find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+    if (updatedOrder) {
+      syncLoadedVersion(updatedOrder);
+    }
     navigate(`/compras?osId=${order.id}`);
   }
 
@@ -766,8 +1020,18 @@ export default function OSDetail() {
       modelo: vehicleModel.trim(),
       ano: vehicleYear.trim(),
       motor: vehicleMotor.trim(),
+      combustivel: vehicleFuel.trim(),
       placa: vehiclePlate.trim(),
+      chassi: vehicleVin.trim(),
     };
+    const quoteItems = [
+      {
+        id: "peca-modal-1",
+        peca: quoteForm.peca.trim(),
+        quantidade,
+        observacao: "",
+      },
+    ];
     const message = [
       `${oficinaConfig.nomeOficina} - solicitação de cotação`,
       "",
@@ -775,16 +1039,14 @@ export default function OSDetail() {
         .filter(Boolean)
         .join(" ") || "não informado"}`,
       `Motor: ${vehicleInfo.motor || "não informado"}`,
+      `Combustível: ${vehicleInfo.combustivel || "não informado"}`,
       `Placa: ${vehicleInfo.placa || "não informada"}`,
+      `Chassi/VIN: ${vehicleInfo.chassi || "não informado"}`,
       "",
       `Peça solicitada: ${quoteForm.peca.trim()}`,
       `Quantidade: ${quantidade}`,
-      `Urgência: ${quoteForm.urgencia}`,
-      quoteForm.observacao.trim()
-        ? `Observação: ${quoteForm.observacao.trim()}`
-        : "",
-      quoteForm.fotos.length
-        ? `Fotos anexadas na OS: ${quoteForm.fotos.join(", ")}`
+      supplierVisiblePhotos.length
+        ? "Fotos técnicas disponíveis no link da cotação."
         : "",
     ]
       .filter(Boolean)
@@ -798,16 +1060,39 @@ export default function OSDetail() {
 
     saveCotacao({
       osId: order.id,
+      oficinaNome: oficinaConfig.nomeOficina,
       fornecedorId: selectedFornecedor.id,
       fornecedorNome: selectedFornecedor.nome,
       fornecedorWhatsapp: selectedFornecedor.whatsapp,
       peca: quoteForm.peca.trim(),
       quantidade,
+      pecas: quoteItems,
       urgencia: quoteForm.urgencia,
       observacao: quoteForm.observacao.trim(),
-      fotos: quoteForm.fotos,
+      fotos: supplierVisiblePhotos,
+      clienteNome: clientName.trim(),
+      clienteTelefone: onlyDigits(clientPhone),
       veiculo: vehicleInfo,
     });
+
+    const updatedOrders = getStoredOrders().map((storedOrder) =>
+      storedOrder.id === order.id
+        ? updateServiceOrderStatusWithTimeline(storedOrder, "AGUARDANDO_COTACAO", {
+            tipo: "cotacao_solicitada",
+            titulo: "Cotação solicitada",
+            descricao: `Cotação enviada para ${selectedFornecedor.nome}.`,
+            usuarioResponsavel: "Compras",
+          })
+        : storedOrder,
+    );
+    saveStoredOrders(updatedOrders);
+    setStatus("AGUARDANDO_COTACAO");
+    const updatedOrder = updatedOrders.find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+    if (updatedOrder) {
+      syncLoadedVersion(updatedOrder);
+    }
 
     window.open(whatsappUrl, "_blank", "noopener,noreferrer");
     setSaveMessage(`Cotação enviada para ${selectedFornecedor.nome}.`);
@@ -820,9 +1105,33 @@ export default function OSDetail() {
       return;
     }
 
+    if (hasConcurrentOrderChange()) {
+      setSaveMessage(
+        "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
+      );
+      return;
+    }
+
+    if (hasLockedBudgetChanges()) {
+      setSaveMessage(
+        "Orçamento já enviado/aprovado. Para alterar valores, crie uma revisão.",
+      );
+      return;
+    }
+
     const vehicleDescription = [vehicleBrand, vehicleModel, vehicleYear]
       .filter(Boolean)
       .join(" ");
+
+    if (!clientName.trim()) {
+      setSaveMessage("Informe o cliente antes de salvar a OS.");
+      return;
+    }
+
+    if (!vehicleDescription || !vehiclePlate.trim()) {
+      setSaveMessage("Informe o veículo e a placa antes de salvar a OS.");
+      return;
+    }
     const checklistInicial = checklistItems.map((item) => ({
       item,
       status: checklistState[item]?.status ?? "",
@@ -831,14 +1140,19 @@ export default function OSDetail() {
     const pecasNecessarias = partLines.map((line) => {
       const quantidade = toNumber(line.quantity);
       const valorUnitario = toNumber(line.unitValue);
+      const existingPart = order.pecasNecessarias.find(
+        (part) => part.id === line.id,
+      );
 
       return {
+        ...existingPart,
         id: line.id,
         peca: line.name.trim(),
         quantidade,
         valorUnitario,
         valorTotal: quantidade * valorUnitario,
         compraId: line.compraId,
+        origemChecklist: line.generatedFromChecklist,
       };
     });
     const servicosMaoDeObra = laborLines.map((line) => ({
@@ -847,13 +1161,16 @@ export default function OSDetail() {
       descricao: line.description.trim(),
       valor: toNumber(line.value),
     }));
+    const clientPhoneDigits = onlyDigits(clientPhone);
+    const clientCpfDigits = onlyDigits(clientCpf);
+    const clientCnpjDigits = onlyDigits(clientCnpj);
     const updatedOrder: ServiceOrder = {
       ...order,
       id: order.id,
       codigo: order.codigo,
-      cliente: clientName.trim() || "Cliente sem nome",
-      telefone: clientPhone.trim(),
-      veiculo: vehicleDescription || "Veículo não informado",
+      cliente: clientName.trim(),
+      telefone: clientPhoneDigits,
+      veiculo: vehicleDescription,
       placa: vehiclePlate.trim(),
       servicoInicial: problemReport.trim(),
       observacao: [defectFound, probableCause, recommendedSolution]
@@ -874,9 +1191,16 @@ export default function OSDetail() {
       statusEntrada: requiresDeposit ? depositStatus : "nao_exige",
       dataPagamentoEntrada: depositPaymentDate,
       valorEntradaPago: depositPaidValue,
+      formaPagamentoEscolhida: order.formaPagamentoEscolhida,
+      parcelasEscolhidas: order.parcelasEscolhidas,
+      valorFinalPagamento: order.valorFinalPagamento,
+      descontoAplicado: order.descontoAplicado,
+      taxaAplicada: order.taxaAplicada,
+      descontoPagamentoAplicado: order.descontoPagamentoAplicado,
+      taxaPagamentoAplicada: order.taxaPagamentoAplicada,
       clienteId: selectedClienteId,
       clienteNome: clientName.trim(),
-      clienteTelefone: clientPhone.trim(),
+      clienteTelefone: clientPhoneDigits,
       veiculoId: selectedVehicleId,
       veiculoMarca: vehicleBrand.trim(),
       veiculoModelo: vehicleModel.trim(),
@@ -887,9 +1211,9 @@ export default function OSDetail() {
       veiculoChassi: vehicleVin.trim(),
       clienteDados: {
         nome: clientName.trim(),
-        telefone: clientPhone.trim(),
-        cpf: clientCpf.trim(),
-        cnpj: clientCnpj.trim(),
+        telefone: clientPhoneDigits,
+        cpf: clientCpfDigits,
+        cnpj: clientCnpjDigits,
         email: clientEmail.trim(),
       },
       veiculoDados: {
@@ -911,6 +1235,7 @@ export default function OSDetail() {
       checklistInicial,
       pecasNecessarias,
       servicosMaoDeObra,
+      fotosOs: photos,
       orcamento: {
         totalPecas: totals.partsTotal,
         totalMaoDeObra: totals.laborTotal,
@@ -921,24 +1246,28 @@ export default function OSDetail() {
         totalFinal: totals.finalTotal,
       },
     };
+    const orderWithTimeline = appendServiceOrderTimelineEvent(updatedOrder, {
+      tipo: "edicao",
+      titulo: "OS editada",
+      descricao: "Dados da ordem de serviço foram atualizados.",
+      usuarioResponsavel: "Oficina",
+      statusAnterior: order.status,
+      statusNovo: status,
+    });
 
     const updatedOrders = getStoredOrders().map((storedOrder) =>
-      storedOrder.id === order.id ? updatedOrder : storedOrder,
+      storedOrder.id === order.id ? orderWithTimeline : storedOrder,
     );
     saveStoredOrders(updatedOrders);
-    registerStockExitForOrder(updatedOrder);
+    registerStockExitForOrder(orderWithTimeline);
+    syncLoadedVersion(orderWithTimeline);
     setSaveMessage("Alterações salvas.");
   }
 
   if (!order) {
     return (
       <div>
-        <button
-          onClick={() => navigate("/os")}
-          className="mb-6 rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800"
-        >
-          Voltar para OS
-        </button>
+        <BackButton className="mb-6" />
 
         <section className={sectionClass}>
           <h2 className="text-3xl font-bold">OS não encontrada</h2>
@@ -952,9 +1281,13 @@ export default function OSDetail() {
 
   return (
     <div className="max-w-6xl">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-6">
+        <BackButton className="mb-4" />
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold">Detalhe da OS {order.id}</h2>
+          <h2 className="text-3xl font-bold">
+            Detalhe da OS {order.codigo || order.id}
+          </h2>
           <p className="mt-2 text-slate-400">
             Edite os dados completos da ordem de serviço.
           </p>
@@ -976,16 +1309,148 @@ export default function OSDetail() {
           >
             Solicitar cotação
           </button>
+        </div>
+      </div>
+      </div>
+
+      <section className={`${sectionClass} mb-6`}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <span className="text-sm font-semibold uppercase text-sky-400">
+              Status da OS
+            </span>
+            <h3 className="mt-1 text-2xl font-bold">
+              {getServiceOrderStatusLabel(status)}
+            </h3>
+            <p className="mt-2 text-sm text-slate-400">
+              Use as ações rápidas para registrar a evolução operacional da OS.
+            </p>
+          </div>
+          <span className={getServiceOrderStatusBadgeClass(status)}>
+            {getServiceOrderStatusLabel(status)}
+          </span>
+        </div>
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          {status === "ABERTA" && (
+            <button
+              type="button"
+              onClick={() =>
+                handleManualStatusAction(
+                  "EM_DIAGNOSTICO",
+                  "Diagnóstico iniciado",
+                  "OS movida para diagnóstico inicial.",
+                  "diagnostico_iniciado",
+                )
+              }
+              className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400"
+            >
+              Iniciar diagnóstico
+            </button>
+          )}
 
           <button
             type="button"
-            onClick={() => navigate("/os")}
-            className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            onClick={handleOpenQuoteModal}
+            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400"
           >
-            Voltar
+            Solicitar cotação
           </button>
+
+          <button
+            type="button"
+            onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
+            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
+          >
+            Enviar orçamento
+          </button>
+
+          {["APROVADA", "APROVADA_PARCIAL", "AGUARDANDO_PECA"].includes(
+            status,
+          ) && (
+            <button
+              type="button"
+              onClick={() =>
+                handleManualStatusAction(
+                  "EM_EXECUCAO",
+                  "Serviço iniciado",
+                  "Execução do serviço iniciada.",
+                  "servico_iniciado",
+                )
+              }
+              className="rounded-lg bg-fuchsia-500 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-400"
+            >
+              Iniciar serviço
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() =>
+              handleManualStatusAction(
+                "AGUARDANDO_PECA",
+                "Aguardando peça",
+                "OS marcada como aguardando peça.",
+                "aguardando_peca",
+              )
+            }
+            className="rounded-lg border border-orange-400/40 px-4 py-2 text-sm font-semibold text-orange-200 hover:bg-orange-500/10"
+          >
+            Marcar aguardando peça
+          </button>
+
+          {status === "EM_EXECUCAO" && (
+            <button
+              type="button"
+              onClick={() =>
+                handleManualStatusAction(
+                  "FINALIZADA",
+                  "Serviço finalizado",
+                  "Execução do serviço finalizada.",
+                  "servico_finalizado",
+                )
+              }
+              className="rounded-lg bg-green-500 px-4 py-2 text-sm font-semibold text-white hover:bg-green-400"
+            >
+              Finalizar serviço
+            </button>
+          )}
+
+          {status === "FINALIZADA" && (
+            <button
+              type="button"
+              onClick={() =>
+                handleManualStatusAction(
+                  "ENTREGUE",
+                  "Veículo entregue",
+                  "Veículo entregue ao cliente.",
+                  "entrega",
+                )
+              }
+              className="rounded-lg bg-teal-500 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-400"
+            >
+              Entregar veículo
+            </button>
+          )}
+
+          {status !== "CANCELADA" && status !== "ENTREGUE" && (
+            <button
+              type="button"
+              onClick={() =>
+                handleManualStatusAction(
+                  "CANCELADA",
+                  "OS cancelada",
+                  "Ordem de serviço cancelada pela oficina.",
+                  "cancelamento",
+                )
+              }
+              className="rounded-lg border border-red-400/40 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/10"
+            >
+              Cancelar OS
+            </button>
+          )}
         </div>
-      </div>
+      </section>
 
       <section className={`${sectionClass} mb-6`}>
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1298,22 +1763,32 @@ export default function OSDetail() {
 
               <div>
                 <label className={labelClass}>Fotos</label>
-                <input
-                  type="file"
-                  multiple
-                  className="w-full rounded-lg border border-dashed border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-300 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-100"
-                  onChange={(event) =>
-                    setQuoteForm((currentState) => ({
-                      ...currentState,
-                      fotos: Array.from(event.target.files || []).map(
-                        (file) => file.name,
-                      ),
-                    }))
-                  }
-                />
-                <p className="mt-2 text-xs text-slate-500">
-                  As fotos são usadas apenas como referência de nome nesta versão.
-                </p>
+                {supplierVisiblePhotos.length > 0 ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {supplierVisiblePhotos.map((photo) => (
+                      <figure
+                        key={photo.id}
+                        className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+                      >
+                        <img
+                          src={photo.dataUrl}
+                          alt={photo.titulo}
+                          className="h-32 w-full object-cover"
+                        />
+                        <figcaption className="p-3 text-xs text-slate-400">
+                          <strong className="block text-slate-100">
+                            {photo.titulo}
+                          </strong>
+                          {photo.tipo} · {photo.visibilidade}
+                        </figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950 p-4 text-sm text-slate-400">
+                    Nenhuma foto liberada para fornecedor nesta OS.
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-wrap justify-end gap-3 border-t border-slate-800 pt-5">
@@ -1404,7 +1879,9 @@ export default function OSDetail() {
                     inputMode="numeric"
                     placeholder="000.000.000-00"
                     value={clientCpf}
-                    onChange={(event) => setClientCpf(formatCpf(event.target.value))}
+                    onChange={(event) =>
+                      setClientCpf(formatCpfCnpj(event.target.value))
+                    }
                   />
                 </div>
 
@@ -1416,7 +1893,7 @@ export default function OSDetail() {
                     placeholder="00.000.000/0000-00"
                     value={clientCnpj}
                     onChange={(event) =>
-                      setClientCnpj(formatCnpj(event.target.value))
+                      setClientCnpj(formatCpfCnpj(event.target.value))
                     }
                   />
                 </div>
@@ -1438,7 +1915,7 @@ export default function OSDetail() {
                       Status da OS
                     </label>
                     <span className={getServiceOrderStatusBadgeClass(status)}>
-                      {status}
+                      {getServiceOrderStatusLabel(status)}
                     </span>
                   </div>
                   <select
@@ -1449,7 +1926,9 @@ export default function OSDetail() {
                     }
                   >
                     {SERVICE_ORDER_STATUSES.map((serviceOrderStatus) => (
-                      <option key={serviceOrderStatus}>{serviceOrderStatus}</option>
+                      <option key={serviceOrderStatus} value={serviceOrderStatus}>
+                        {getServiceOrderStatusLabel(serviceOrderStatus)}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -1704,6 +2183,14 @@ export default function OSDetail() {
           </div>
         </section>
 
+        <ServiceOrderPhotosSection
+          photos={photos}
+          onChange={setPhotos}
+          sectionClass={sectionClass}
+          labelClass={labelClass}
+          inputClass={inputClass}
+        />
+
         <section className={sectionClass}>
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -1777,9 +2264,28 @@ export default function OSDetail() {
                       {formatCurrency(lineTotal)}
                     </div>
                   </div>
+                  <div className="md:col-span-4">
+                    <button
+                      type="button"
+                      onClick={() => removePartLine(line.id)}
+                      className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                    >
+                      Remover peça
+                    </button>
+                  </div>
                 </div>
               );
             })}
+          </div>
+
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={addPartLine}
+              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
+              Adicionar peça
+            </button>
           </div>
         </section>
 
@@ -1799,18 +2305,18 @@ export default function OSDetail() {
               onClick={addLaborLine}
               className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
             >
-              Adicionar serviço
+              Adicionar outro serviço
             </button>
           </div>
 
           <div className="grid gap-0">
-            {laborLines.map((line, index) => (
+            {laborLines.map((line) => (
               <div
                 key={line.id}
                 className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(150px,1.2fr)_minmax(180px,2fr)_130px]"
               >
                 <div>
-                  <label className={labelClass}>Serviço {index + 1}</label>
+                  <label className={labelClass}>Serviço</label>
                   <input
                     className={compactInputClass}
                     placeholder="Troca de pastilhas"
@@ -1822,7 +2328,7 @@ export default function OSDetail() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Descrição</label>
+                  <label className={labelClass}>Observação</label>
                   <input
                     className={compactInputClass}
                     placeholder="Remover rodas, substituir e testar"
@@ -1834,7 +2340,7 @@ export default function OSDetail() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Valor</label>
+                  <label className={labelClass}>Valor da mão de obra</label>
                   <input
                     type="number"
                     min="0"
@@ -1882,6 +2388,14 @@ export default function OSDetail() {
                 <strong className="text-xl text-sky-300">
                   {formatCurrency(totals.finalTotal)}
                 </strong>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
+                <p className="font-semibold text-slate-100">
+                  Entrada/sinal: {formatCurrency(depositSummary.entradaCalculada)}
+                </p>
+                <p className="mt-1 text-slate-400">
+                  Saldo restante: {formatCurrency(depositSummary.saldoRestante)}
+                </p>
               </div>
             </div>
 
@@ -2013,6 +2527,116 @@ export default function OSDetail() {
               </div>
             </div>
           </div>
+
+          <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <h4 className="font-semibold text-slate-100">
+              Formas de pagamento disponíveis
+            </h4>
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Pix</span>
+                <p className="mt-1 font-semibold">
+                  {formatCurrency(paymentOptions.pix.valorFinalPagamento)}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Desconto {formatCurrency(paymentOptions.pix.descontoAplicado)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Dinheiro</span>
+                <p className="mt-1 font-semibold">
+                  {formatCurrency(paymentOptions.dinheiro.valorFinalPagamento)}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Desconto {formatCurrency(paymentOptions.dinheiro.descontoAplicado)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Débito</span>
+                <p className="mt-1 font-semibold">
+                  {formatCurrency(paymentOptions.debito.valorFinalPagamento)}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Desconto {formatCurrency(paymentOptions.debito.descontoAplicado)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-900 p-3">
+                <span className="text-xs uppercase text-slate-500">Crédito</span>
+                <p className="mt-1 font-semibold">
+                  até {oficinaConfig.regrasPagamento.credito.maxParcelas}x
+                </p>
+                <p className="text-xs text-slate-500">
+                  {oficinaConfig.regrasPagamento.credito.parcelasSemJuros}x sem juros
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className={sectionClass}>
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <span className="text-sm font-semibold uppercase text-sky-400">
+                Histórico
+              </span>
+              <h3 className="mt-1 text-2xl font-bold">Histórico da OS</h3>
+              <p className="mt-2 text-sm text-slate-400">
+                Eventos internos registrados em ordem cronológica reversa.
+              </p>
+            </div>
+            <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+              {timeline.length} evento(s)
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {timeline.length ? (
+              [...timeline]
+                .sort(
+                  (a, b) =>
+                    new Date(b.dataHora).getTime() -
+                    new Date(a.dataHora).getTime(),
+                )
+                .map((event) => (
+                  <div
+                    key={event.id}
+                    className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-100">
+                          {event.titulo}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-400">
+                          {event.descricao}
+                        </p>
+                      </div>
+                      <span className="text-xs text-slate-500">
+                        {formatDate(event.dataHora)}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                      {event.statusAnterior && event.statusNovo && (
+                        <span className="rounded-full border border-slate-700 px-2 py-1">
+                          {getServiceOrderStatusLabel(event.statusAnterior)} →{" "}
+                          {getServiceOrderStatusLabel(event.statusNovo)}
+                        </span>
+                      )}
+                      <span className="rounded-full border border-slate-700 px-2 py-1">
+                        Responsável: {event.usuarioResponsavel}
+                      </span>
+                      <span className="rounded-full border border-slate-700 px-2 py-1">
+                        Tipo: {event.tipo}
+                      </span>
+                    </div>
+                  </div>
+                ))
+            ) : (
+              <p className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+                Nenhum evento registrado ainda.
+              </p>
+            )}
+          </div>
         </section>
 
         <div className="sticky bottom-0 -mx-2 flex flex-wrap items-center justify-end gap-3 border-t border-slate-800 bg-slate-950/95 px-2 py-4 backdrop-blur">
@@ -2024,10 +2648,18 @@ export default function OSDetail() {
 
           <button
             type="button"
-            onClick={() => navigate("/os")}
-            className="rounded-xl border border-slate-700 px-6 py-3 font-semibold text-slate-200 hover:bg-slate-800"
+            onClick={handleOpenQuoteModal}
+            className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-400"
           >
-            Voltar
+            Solicitar cotação
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
+            className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+          >
+            Enviar orçamento
           </button>
 
           <button

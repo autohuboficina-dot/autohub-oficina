@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ROLE_LABELS, USER_ROLES, type UserRole } from "../../accessControl";
+import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   deleteUsuario,
   getConfiguracoesOficina,
@@ -10,7 +11,7 @@ import {
   type OficinaConfiguracoes,
   type UsuarioSistema,
   type UsuarioStatus,
-} from "./configuracoesStorage";
+} from "../../services/configuracoesService";
 
 type ConfiguracoesProps = {
   role: UserRole;
@@ -39,9 +40,15 @@ const permissionLabels: Record<UserRole, string> = {
 };
 
 export default function Configuracoes({ role }: ConfiguracoesProps) {
-  const [config, setConfig] = useState<OficinaConfiguracoes>(() =>
-    getConfiguracoesOficina(),
-  );
+  const [config, setConfig] = useState<OficinaConfiguracoes>(() => {
+    const storedConfig = getConfiguracoesOficina();
+
+    return {
+      ...storedConfig,
+      cnpj: formatCpfCnpj(storedConfig.cnpj),
+      whatsapp: formatPhone(storedConfig.whatsapp),
+    };
+  });
   const [usuarios, setUsuarios] = useState<UsuarioSistema[]>(() => getUsuarios());
   const [usuarioForm, setUsuarioForm] =
     useState<UsuarioFormState>(initialUsuarioForm);
@@ -61,10 +68,55 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
     }));
   }
 
+  function updateDiscountRule(
+    field: "pix" | "dinheiro" | "debito",
+    key: "tipo" | "valor",
+    value: string,
+  ) {
+    setConfig((currentConfig) => ({
+      ...currentConfig,
+      regrasPagamento: {
+        ...currentConfig.regrasPagamento,
+        [field]: {
+          ...currentConfig.regrasPagamento[field],
+          [key]: key === "valor" ? Number(value || 0) : value,
+        },
+      },
+    }));
+  }
+
+  function updateCreditRule(
+    key:
+      | "maxParcelas"
+      | "parcelasSemJuros"
+      | "taxaParcelamentoPercentual"
+      | "repassarTaxaCliente",
+    value: string | boolean,
+  ) {
+    setConfig((currentConfig) => ({
+      ...currentConfig,
+      regrasPagamento: {
+        ...currentConfig.regrasPagamento,
+        credito: {
+          ...currentConfig.regrasPagamento.credito,
+          [key]: typeof value === "boolean" ? value : Number(value || 0),
+        },
+      },
+    }));
+  }
+
   function handleSaveConfig(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const savedConfig = saveConfiguracoesOficina(config);
-    setConfig(savedConfig);
+    const savedConfig = saveConfiguracoesOficina({
+      ...config,
+      cnpj: onlyDigits(config.cnpj),
+      whatsapp: onlyDigits(config.whatsapp),
+    });
+    setConfig({
+      ...savedConfig,
+      cnpj: formatCpfCnpj(savedConfig.cnpj),
+      whatsapp: formatPhone(savedConfig.whatsapp),
+    });
     setFeedback("Configurações da oficina salvas.");
   }
 
@@ -182,7 +234,9 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
             <input
               className={inputClass}
               value={config.cnpj}
-              onChange={(event) => updateConfigField("cnpj", event.target.value)}
+              onChange={(event) =>
+                updateConfigField("cnpj", formatCpfCnpj(event.target.value))
+              }
             />
           </div>
 
@@ -192,7 +246,7 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
               className={inputClass}
               value={config.whatsapp}
               onChange={(event) =>
-                updateConfigField("whatsapp", event.target.value)
+                updateConfigField("whatsapp", formatPhone(event.target.value))
               }
             />
           </div>
@@ -284,6 +338,108 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
           </button>
         </div>
       </form>
+
+      <section className={sectionClass}>
+        <div className="mb-5">
+          <h3 className="text-xl font-bold">Regras de pagamento</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Usadas para calcular Pix, dinheiro, débito e crédito sobre o saldo
+            restante quando houver entrada/sinal.
+          </p>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          {(["pix", "dinheiro", "debito"] as const).map((field) => (
+            <div key={field} className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+              <h4 className="font-semibold capitalize text-slate-100">
+                {field === "debito" ? "Débito à vista" : field}
+              </h4>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={labelClass}>Tipo</label>
+                  <select
+                    className={inputClass}
+                    value={config.regrasPagamento[field].tipo}
+                    onChange={(event) =>
+                      updateDiscountRule(field, "tipo", event.target.value)
+                    }
+                  >
+                    <option value="percentual">Percentual</option>
+                    <option value="valor">Valor</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={labelClass}>Valor</label>
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={config.regrasPagamento[field].valor}
+                    onChange={(event) =>
+                      updateDiscountRule(field, "valor", event.target.value)
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4">
+          <h4 className="font-semibold text-slate-100">Cartão de crédito</h4>
+          <div className="mt-4 grid gap-4 md:grid-cols-4">
+            <div>
+              <label className={labelClass}>Máximo de parcelas</label>
+              <input
+                className={inputClass}
+                type="number"
+                min="1"
+                value={config.regrasPagamento.credito.maxParcelas}
+                onChange={(event) =>
+                  updateCreditRule("maxParcelas", event.target.value)
+                }
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Parcelas sem juros</label>
+              <input
+                className={inputClass}
+                type="number"
+                min="1"
+                value={config.regrasPagamento.credito.parcelasSemJuros}
+                onChange={(event) =>
+                  updateCreditRule("parcelasSemJuros", event.target.value)
+                }
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Taxa percentual</label>
+              <input
+                className={inputClass}
+                type="number"
+                min="0"
+                step="0.01"
+                value={config.regrasPagamento.credito.taxaParcelamentoPercentual}
+                onChange={(event) =>
+                  updateCreditRule("taxaParcelamentoPercentual", event.target.value)
+                }
+              />
+            </div>
+            <label className="flex items-end gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 text-sm font-medium text-slate-200">
+              <input
+                type="checkbox"
+                checked={config.regrasPagamento.credito.repassarTaxaCliente}
+                onChange={(event) =>
+                  updateCreditRule("repassarTaxaCliente", event.target.checked)
+                }
+                className="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-sky-500"
+              />
+              Repassar taxa ao cliente
+            </label>
+          </div>
+        </div>
+      </section>
 
       <section className={sectionClass}>
         <div className="mb-5">

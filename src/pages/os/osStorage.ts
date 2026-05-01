@@ -1,21 +1,35 @@
+import { createSecureId } from "../../utils/ids";
+
 export type ChecklistStatus = "OK" | "Trocar" | "";
 
 export const SERVICE_ORDER_STATUSES = [
-  "Em diagnóstico",
-  "Aguardando aprovação",
-  "Pré-aprovado pelo cliente",
-  "Aprovado confirmado",
-  "Aguardando pagamento da entrada",
-  "Liberado para execução",
-  "Aguardando peça",
-  "Aguardando aprovação parcial",
-  "Aguardando revisão",
-  "Em execução",
-  "Finalizado",
-  "Cancelado",
+  "ABERTA",
+  "EM_DIAGNOSTICO",
+  "AGUARDANDO_COTACAO",
+  "COTACAO_RECEBIDA",
+  "ORCAMENTO_ENVIADO",
+  "AGUARDANDO_APROVACAO",
+  "APROVADA",
+  "APROVADA_PARCIAL",
+  "AGUARDANDO_PECA",
+  "EM_EXECUCAO",
+  "FINALIZADA",
+  "ENTREGUE",
+  "CANCELADA",
 ] as const;
 
 export type ServiceOrderStatus = (typeof SERVICE_ORDER_STATUSES)[number];
+
+export type ServiceOrderTimelineEvent = {
+  id: string;
+  dataHora: string;
+  tipo: string;
+  titulo: string;
+  descricao: string;
+  usuarioResponsavel: string;
+  statusAnterior: ServiceOrderStatus | "";
+  statusNovo: ServiceOrderStatus | "";
+};
 
 export const BUDGET_APPROVAL_STATUSES = [
   "pendente",
@@ -41,6 +55,13 @@ export type ServiceOrderPart = {
   valorUnitario: number;
   valorTotal: number;
   compraId?: string;
+  origemChecklist?: string;
+  cotacaoPecaId?: string;
+  cotacaoFornecedorEscolhido?: string;
+  cotacaoPrecoEscolhido?: number;
+  cotacaoMarcaEscolhida?: string;
+  cotacaoObservacaoEscolhida?: string;
+  cotacaoDataEscolha?: string;
 };
 
 export type ServiceOrderLabor = {
@@ -50,10 +71,40 @@ export type ServiceOrderLabor = {
   valor: number;
 };
 
+export const SERVICE_ORDER_PHOTO_TYPES = [
+  "problema",
+  "peça",
+  "técnico",
+  "antes",
+  "depois",
+] as const;
+
+export const SERVICE_ORDER_PHOTO_VISIBILITIES = [
+  "Cliente",
+  "Fornecedor",
+  "Ambos",
+  "Interno",
+] as const;
+
+export type ServiceOrderPhotoType = (typeof SERVICE_ORDER_PHOTO_TYPES)[number];
+export type ServiceOrderPhotoVisibility =
+  (typeof SERVICE_ORDER_PHOTO_VISIBILITIES)[number];
+
+export type ServiceOrderPhoto = {
+  id: string;
+  titulo: string;
+  tipo: ServiceOrderPhotoType;
+  visibilidade: ServiceOrderPhotoVisibility;
+  dataUrl: string;
+  criadoEm: string;
+};
+
 export type ServiceOrder = {
   id: string;
   codigo: string;
   criadoEm: string;
+  updatedAt: string;
+  version: number;
   cliente: string;
   telefone: string;
   veiculo: string;
@@ -61,6 +112,7 @@ export type ServiceOrder = {
   servicoInicial: string;
   observacao: string;
   status: ServiceOrderStatus;
+  timeline: ServiceOrderTimelineEvent[];
   statusAprovacao: BudgetApprovalStatus;
   itensAprovados: string[];
   dataDecisaoAprovacao: string;
@@ -78,6 +130,13 @@ export type ServiceOrder = {
   statusEntrada: "nao_exige" | "pendente" | "paga";
   dataPagamentoEntrada: string;
   valorEntradaPago: number;
+  formaPagamentoEscolhida: "Pix" | "Dinheiro" | "Débito" | "Crédito" | "";
+  parcelasEscolhidas: number;
+  valorFinalPagamento: number;
+  descontoAplicado: number;
+  taxaAplicada: number;
+  descontoPagamentoAplicado: number;
+  taxaPagamentoAplicada: number;
   clienteId: string;
   clienteNome: string;
   clienteTelefone: string;
@@ -115,6 +174,7 @@ export type ServiceOrder = {
   checklistInicial: ServiceOrderChecklistItem[];
   pecasNecessarias: ServiceOrderPart[];
   servicosMaoDeObra: ServiceOrderLabor[];
+  fotosOs: ServiceOrderPhoto[];
   cotacaoFornecedorEscolhido?: string;
   cotacaoPrecoFinalPeca?: number;
   cotacaoIdEscolhida?: string;
@@ -130,25 +190,81 @@ export type ServiceOrder = {
 };
 
 const STORAGE_KEY = "autohub:service-orders";
+let lastStorageError = "";
+
+export function getServiceOrderStorageError() {
+  return lastStorageError;
+}
+
+export function clearServiceOrderStorageError() {
+  lastStorageError = "";
+}
+
+export function createServiceOrderId() {
+  return createSecureId("OS");
+}
 
 export function normalizeServiceOrderStatus(status = ""): ServiceOrderStatus {
   if (SERVICE_ORDER_STATUSES.includes(status as ServiceOrderStatus)) {
     return status as ServiceOrderStatus;
   }
 
-  if (status === "Aprovada") {
-    return "Em execução";
-  }
+  const legacyStatusMap: Record<string, ServiceOrderStatus> = {
+    "Em diagnóstico": "EM_DIAGNOSTICO",
+    "Aguardando aprovação": "AGUARDANDO_APROVACAO",
+    "Pré-aprovado pelo cliente": "APROVADA",
+    "Aprovado confirmado": "APROVADA",
+    "Aguardando pagamento da entrada": "APROVADA",
+    "Liberado para execução": "APROVADA",
+    "Aguardando peça": "AGUARDANDO_PECA",
+    "Aguardando aprovação parcial": "APROVADA_PARCIAL",
+    "Aguardando revisão": "AGUARDANDO_APROVACAO",
+    "Em execução": "EM_EXECUCAO",
+    Finalizado: "FINALIZADA",
+    Finalizada: "FINALIZADA",
+    Entregue: "ENTREGUE",
+    Cancelado: "CANCELADA",
+    Cancelada: "CANCELADA",
+    Aprovada: "APROVADA",
+  };
 
-  if (status === "Finalizada") {
-    return "Finalizado";
-  }
+  return legacyStatusMap[status] || "ABERTA";
+}
 
-  if (status === "Cancelada") {
-    return "Cancelado";
-  }
+export function getServiceOrderStatusLabel(status: ServiceOrderStatus) {
+  const labels: Record<ServiceOrderStatus, string> = {
+    ABERTA: "Aberta",
+    EM_DIAGNOSTICO: "Em diagnóstico",
+    AGUARDANDO_COTACAO: "Aguardando cotação",
+    COTACAO_RECEBIDA: "Cotação recebida",
+    ORCAMENTO_ENVIADO: "Orçamento enviado",
+    AGUARDANDO_APROVACAO: "Aguardando aprovação",
+    APROVADA: "Aprovada",
+    APROVADA_PARCIAL: "Aprovada parcial",
+    AGUARDANDO_PECA: "Aguardando peça",
+    EM_EXECUCAO: "Em execução",
+    FINALIZADA: "Finalizada",
+    ENTREGUE: "Entregue",
+    CANCELADA: "Cancelada",
+  };
 
-  return "Em diagnóstico";
+  return labels[status];
+}
+
+export function isServiceOrderBudgetLocked(status: ServiceOrderStatus) {
+  const lockedStatuses: ServiceOrderStatus[] = [
+    "ORCAMENTO_ENVIADO",
+    "AGUARDANDO_APROVACAO",
+    "APROVADA",
+    "APROVADA_PARCIAL",
+    "AGUARDANDO_PECA",
+    "EM_EXECUCAO",
+    "FINALIZADA",
+    "ENTREGUE",
+    "CANCELADA",
+  ];
+
+  return lockedStatuses.includes(status);
 }
 
 export function normalizeBudgetApprovalStatus(
@@ -171,26 +287,95 @@ export function normalizeBudgetApprovalStatus(
 
 export function getServiceOrderStatusBadgeClass(status: ServiceOrderStatus) {
   const classes: Record<ServiceOrderStatus, string> = {
-    "Em diagnóstico": "bg-sky-500/15 text-sky-200 ring-sky-400/30",
-    "Aguardando aprovação": "bg-amber-500/15 text-amber-200 ring-amber-400/30",
-    "Pré-aprovado pelo cliente":
-      "bg-yellow-500/15 text-yellow-200 ring-yellow-400/30",
-    "Aprovado confirmado":
-      "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
-    "Aguardando pagamento da entrada":
+    ABERTA: "bg-slate-700/70 text-slate-200 ring-slate-500/30",
+    EM_DIAGNOSTICO: "bg-sky-500/15 text-sky-200 ring-sky-400/30",
+    AGUARDANDO_COTACAO: "bg-cyan-500/15 text-cyan-200 ring-cyan-400/30",
+    COTACAO_RECEBIDA: "bg-violet-500/15 text-violet-200 ring-violet-400/30",
+    ORCAMENTO_ENVIADO: "bg-blue-500/15 text-blue-200 ring-blue-400/30",
+    AGUARDANDO_APROVACAO:
       "bg-amber-500/15 text-amber-200 ring-amber-400/30",
-    "Liberado para execução":
-      "bg-green-500/15 text-green-200 ring-green-400/30",
-    "Aguardando peça": "bg-orange-500/15 text-orange-200 ring-orange-400/30",
-    "Aguardando aprovação parcial":
-      "bg-yellow-500/15 text-yellow-200 ring-yellow-400/30",
-    "Aguardando revisão": "bg-cyan-500/15 text-cyan-200 ring-cyan-400/30",
-    "Em execução": "bg-violet-500/15 text-violet-200 ring-violet-400/30",
-    Finalizado: "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
-    Cancelado: "bg-red-500/15 text-red-200 ring-red-400/30",
+    APROVADA: "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
+    APROVADA_PARCIAL: "bg-yellow-500/15 text-yellow-200 ring-yellow-400/30",
+    AGUARDANDO_PECA: "bg-orange-500/15 text-orange-200 ring-orange-400/30",
+    EM_EXECUCAO: "bg-fuchsia-500/15 text-fuchsia-200 ring-fuchsia-400/30",
+    FINALIZADA: "bg-green-500/15 text-green-200 ring-green-400/30",
+    ENTREGUE: "bg-teal-500/15 text-teal-200 ring-teal-400/30",
+    CANCELADA: "bg-red-500/15 text-red-200 ring-red-400/30",
   };
 
   return `inline-flex rounded-full px-2 py-1 text-xs font-medium ring-1 ${classes[status]}`;
+}
+
+export function createServiceOrderTimelineEvent({
+  tipo,
+  titulo,
+  descricao,
+  usuarioResponsavel = "Sistema",
+  statusAnterior = "",
+  statusNovo = "",
+}: Omit<ServiceOrderTimelineEvent, "id" | "dataHora">): ServiceOrderTimelineEvent {
+  return {
+    id: createSecureId("evt"),
+    dataHora: new Date().toISOString(),
+    tipo,
+    titulo,
+    descricao,
+    usuarioResponsavel,
+    statusAnterior,
+    statusNovo,
+  };
+}
+
+export function appendServiceOrderTimelineEvent(
+  order: ServiceOrder,
+  event: Omit<ServiceOrderTimelineEvent, "id" | "dataHora">,
+): ServiceOrder {
+  return {
+    ...order,
+    updatedAt: new Date().toISOString(),
+    version: Number(order.version || 0) + 1,
+    timeline: [
+      createServiceOrderTimelineEvent(event),
+      ...(Array.isArray(order.timeline) ? order.timeline : []),
+    ],
+  };
+}
+
+export function updateServiceOrderStatusWithTimeline(
+  order: ServiceOrder,
+  nextStatus: ServiceOrderStatus,
+  event: {
+    tipo: string;
+    titulo: string;
+    descricao: string;
+    usuarioResponsavel?: string;
+  },
+): ServiceOrder {
+  const previousStatus = normalizeServiceOrderStatus(order.status);
+
+  if (previousStatus === nextStatus) {
+    return appendServiceOrderTimelineEvent(order, {
+      ...event,
+      usuarioResponsavel: event.usuarioResponsavel || "Sistema",
+      statusAnterior: previousStatus,
+      statusNovo: nextStatus,
+    });
+  }
+
+  return appendServiceOrderTimelineEvent(
+    {
+      ...order,
+      status: nextStatus,
+      updatedAt: new Date().toISOString(),
+      version: Number(order.version || 0) + 1,
+    },
+    {
+      ...event,
+      usuarioResponsavel: event.usuarioResponsavel || "Sistema",
+      statusAnterior: previousStatus,
+      statusNovo: nextStatus,
+    },
+  );
 }
 
 export function getBudgetApprovalLabel(status: BudgetApprovalStatus) {
@@ -226,27 +411,25 @@ export function getServiceOrderStatusForBudgetDecision(
   approvalStatus: BudgetApprovalStatus,
 ): ServiceOrderStatus {
   if (approvalStatus === "pre_aprovado") {
-    return "Pré-aprovado pelo cliente";
+    return "APROVADA";
   }
 
   if (approvalStatus === "pre_aprovado_parcial") {
-    return "Pré-aprovado pelo cliente";
+    return "APROVADA_PARCIAL";
   }
 
   if (approvalStatus === "confirmado_oficina") {
-    if (order.exigeEntrada && order.statusEntrada !== "paga") {
-      return "Aguardando pagamento da entrada";
-    }
-
-    return "Aprovado confirmado";
+    return order.pecasNecessarias.some((part) => part.compraId)
+      ? "AGUARDANDO_PECA"
+      : "APROVADA";
   }
 
   if (approvalStatus === "recusado") {
-    return "Cancelado";
+    return "CANCELADA";
   }
 
   if (approvalStatus === "revisao") {
-    return "Aguardando revisão";
+    return "AGUARDANDO_APROVACAO";
   }
 
   return order.status;
@@ -262,7 +445,19 @@ export const exampleOrders: ServiceOrder[] = [
     placa: "ABC1D23",
     servicoInicial: "Cliente relatou barulho ao frear.",
     observacao: "Aguardando diagnóstico inicial.",
-    status: "Em diagnóstico",
+    status: "EM_DIAGNOSTICO",
+    timeline: [
+      {
+        id: "evt-os-001-criada",
+        dataHora: "2026-04-30T00:00:00.000Z",
+        tipo: "criacao",
+        titulo: "OS criada",
+        descricao: "Ordem de serviço de exemplo criada.",
+        usuarioResponsavel: "Sistema",
+        statusAnterior: "",
+        statusNovo: "EM_DIAGNOSTICO",
+      },
+    ],
     statusAprovacao: "pendente",
     itensAprovados: [],
     dataDecisaoAprovacao: "",
@@ -280,6 +475,13 @@ export const exampleOrders: ServiceOrder[] = [
     statusEntrada: "nao_exige",
     dataPagamentoEntrada: "",
     valorEntradaPago: 0,
+    formaPagamentoEscolhida: "",
+    parcelasEscolhidas: 1,
+    valorFinalPagamento: 0,
+    descontoAplicado: 0,
+    taxaAplicada: 0,
+    descontoPagamentoAplicado: 0,
+    taxaPagamentoAplicada: 0,
     clienteId: "",
     clienteNome: "Carlos Henrique",
     clienteTelefone: "(11) 99999-9999",
@@ -292,6 +494,8 @@ export const exampleOrders: ServiceOrder[] = [
     veiculoPlaca: "ABC1D23",
     veiculoChassi: "",
     criadoEm: "2026-04-30T00:00:00.000Z",
+    updatedAt: "2026-04-30T00:00:00.000Z",
+    version: 1,
     clienteDados: {
       nome: "Carlos Henrique",
       telefone: "(11) 99999-9999",
@@ -318,6 +522,7 @@ export const exampleOrders: ServiceOrder[] = [
     checklistInicial: [],
     pecasNecessarias: [],
     servicosMaoDeObra: [],
+    fotosOs: [],
     cotacaoFornecedorEscolhido: "",
     cotacaoPrecoFinalPeca: 0,
     cotacaoIdEscolhida: "",
@@ -340,7 +545,19 @@ export const exampleOrders: ServiceOrder[] = [
     placa: "XYZ4E56",
     servicoInicial: "Revisão preventiva e troca de óleo.",
     observacao: "Cliente pediu orçamento antes da execução.",
-    status: "Aguardando aprovação",
+    status: "AGUARDANDO_APROVACAO",
+    timeline: [
+      {
+        id: "evt-os-002-criada",
+        dataHora: "2026-04-30T00:00:00.000Z",
+        tipo: "criacao",
+        titulo: "OS criada",
+        descricao: "Ordem de serviço de exemplo criada.",
+        usuarioResponsavel: "Sistema",
+        statusAnterior: "",
+        statusNovo: "AGUARDANDO_APROVACAO",
+      },
+    ],
     statusAprovacao: "pendente",
     itensAprovados: [],
     dataDecisaoAprovacao: "",
@@ -358,6 +575,13 @@ export const exampleOrders: ServiceOrder[] = [
     statusEntrada: "nao_exige",
     dataPagamentoEntrada: "",
     valorEntradaPago: 0,
+    formaPagamentoEscolhida: "",
+    parcelasEscolhidas: 1,
+    valorFinalPagamento: 0,
+    descontoAplicado: 0,
+    taxaAplicada: 0,
+    descontoPagamentoAplicado: 0,
+    taxaPagamentoAplicada: 0,
     clienteId: "",
     clienteNome: "Mariana Souza",
     clienteTelefone: "(21) 98888-7777",
@@ -370,6 +594,8 @@ export const exampleOrders: ServiceOrder[] = [
     veiculoPlaca: "XYZ4E56",
     veiculoChassi: "",
     criadoEm: "2026-04-30T00:00:00.000Z",
+    updatedAt: "2026-04-30T00:00:00.000Z",
+    version: 1,
     clienteDados: {
       nome: "Mariana Souza",
       telefone: "(21) 98888-7777",
@@ -396,6 +622,7 @@ export const exampleOrders: ServiceOrder[] = [
     checklistInicial: [],
     pecasNecessarias: [],
     servicosMaoDeObra: [],
+    fotosOs: [],
     cotacaoFornecedorEscolhido: "",
     cotacaoPrecoFinalPeca: 0,
     cotacaoIdEscolhida: "",
@@ -412,14 +639,58 @@ export const exampleOrders: ServiceOrder[] = [
 ];
 
 function normalizeOrder(order: ServiceOrder): ServiceOrder {
-  const codigo = order.codigo || order.id;
-  const id = /^OS-\d+$/.test(order.id) ? order.id : codigo;
+  const codigo = order.codigo || (/^OS-\d+$/.test(order.id) ? order.id : "");
+  const id = order.id || createServiceOrderId();
+  const legacyPhotoSources = order as ServiceOrder & {
+    fotos?: string[];
+    fotosOrcamento?: string[];
+    fotosVeiculo?: string[];
+  };
+  const legacyPhotos = [
+    ...(legacyPhotoSources.fotos || []),
+    ...(legacyPhotoSources.fotosOrcamento || []),
+    ...(legacyPhotoSources.fotosVeiculo || []),
+  ];
+  const fotosOs = Array.isArray(order.fotosOs)
+    ? order.fotosOs.map((photo, index) => normalizeServiceOrderPhoto(photo, index))
+    : legacyPhotos.map((photo, index) =>
+        normalizeServiceOrderPhoto(photo, index),
+      );
+  const normalizedStatus = normalizeServiceOrderStatus(order.status);
+  const timeline: ServiceOrderTimelineEvent[] = Array.isArray(order.timeline)
+    ? order.timeline.map((event, index) => ({
+        id: event.id || `evt-legado-${id}-${index}`,
+        dataHora: event.dataHora || order.criadoEm || new Date().toISOString(),
+        tipo: event.tipo || "historico",
+        titulo: event.titulo || "Evento da OS",
+        descricao: event.descricao || "",
+        usuarioResponsavel: event.usuarioResponsavel || "Sistema",
+        statusAnterior: event.statusAnterior
+          ? normalizeServiceOrderStatus(event.statusAnterior)
+          : "",
+        statusNovo: event.statusNovo
+          ? normalizeServiceOrderStatus(event.statusNovo)
+          : "",
+      }))
+    : [
+        {
+          id: `evt-normalizado-${id}`,
+          dataHora: order.criadoEm || new Date().toISOString(),
+          tipo: "criacao",
+          titulo: "OS criada",
+          descricao: "Evento inicial gerado a partir dos dados salvos.",
+          usuarioResponsavel: "Sistema",
+          statusAnterior: "",
+          statusNovo: normalizedStatus,
+        },
+      ];
 
   return {
     ...order,
     id,
     codigo,
-    status: normalizeServiceOrderStatus(order.status),
+    status: normalizedStatus,
+    timeline,
     statusAprovacao: normalizeBudgetApprovalStatus(order.statusAprovacao),
     itensAprovados: Array.isArray(order.itensAprovados)
       ? order.itensAprovados
@@ -444,7 +715,28 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
       : "nao_exige",
     dataPagamentoEntrada: order.dataPagamentoEntrada ?? "",
     valorEntradaPago: Number(order.valorEntradaPago || 0),
+    formaPagamentoEscolhida:
+      order.formaPagamentoEscolhida === "Pix" ||
+      order.formaPagamentoEscolhida === "Dinheiro" ||
+      order.formaPagamentoEscolhida === "Débito" ||
+      order.formaPagamentoEscolhida === "Crédito"
+        ? order.formaPagamentoEscolhida
+        : "",
+    parcelasEscolhidas: Math.max(Number(order.parcelasEscolhidas || 1), 1),
+    valorFinalPagamento: Number(order.valorFinalPagamento || 0),
+    descontoAplicado: Number(
+      order.descontoAplicado || order.descontoPagamentoAplicado || 0,
+    ),
+    taxaAplicada: Number(order.taxaAplicada || order.taxaPagamentoAplicada || 0),
+    descontoPagamentoAplicado: Number(
+      order.descontoPagamentoAplicado || order.descontoAplicado || 0,
+    ),
+    taxaPagamentoAplicada: Number(
+      order.taxaPagamentoAplicada || order.taxaAplicada || 0,
+    ),
     criadoEm: order.criadoEm || new Date().toISOString(),
+    updatedAt: order.updatedAt || order.criadoEm || new Date().toISOString(),
+    version: Math.max(Number(order.version || 1), 1),
     clienteId: order.clienteId ?? "",
     clienteNome: order.clienteNome ?? order.clienteDados?.nome ?? order.cliente,
     clienteTelefone:
@@ -484,6 +776,7 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
     checklistInicial: order.checklistInicial ?? [],
     pecasNecessarias: order.pecasNecessarias ?? [],
     servicosMaoDeObra: order.servicosMaoDeObra ?? [],
+    fotosOs,
     cotacaoFornecedorEscolhido: order.cotacaoFornecedorEscolhido ?? "",
     cotacaoPrecoFinalPeca: order.cotacaoPrecoFinalPeca ?? 0,
     cotacaoIdEscolhida: order.cotacaoIdEscolhida ?? "",
@@ -499,25 +792,70 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
   };
 }
 
-export function getStoredOrders() {
-  const storedOrders = localStorage.getItem(STORAGE_KEY);
-
-  if (!storedOrders) {
-    return exampleOrders.map(normalizeOrder);
+function normalizeServiceOrderPhoto(
+  photo: ServiceOrderPhoto | string,
+  index: number,
+): ServiceOrderPhoto {
+  if (typeof photo === "string") {
+    return {
+      id: createSecureId("foto-legada"),
+      titulo: `Foto ${index + 1}`,
+      tipo: "técnico",
+      visibilidade: "Ambos",
+      dataUrl: photo,
+      criadoEm: new Date().toISOString(),
+    };
   }
 
+  const tipo = SERVICE_ORDER_PHOTO_TYPES.includes(photo.tipo)
+    ? photo.tipo
+    : "técnico";
+  const visibilidade = SERVICE_ORDER_PHOTO_VISIBILITIES.includes(
+    photo.visibilidade,
+  )
+    ? photo.visibilidade
+    : "Interno";
+
+  return {
+    id: photo.id || createSecureId("foto"),
+    titulo: photo.titulo || `Foto ${index + 1}`,
+    tipo,
+    visibilidade,
+    dataUrl: photo.dataUrl || "",
+    criadoEm: photo.criadoEm || new Date().toISOString(),
+  };
+}
+
+export function getStoredOrders() {
+  lastStorageError = "";
+
   try {
+    const storedOrders = localStorage.getItem(STORAGE_KEY) || "";
+
+    if (!storedOrders) {
+      return [];
+    }
+
     const parsedOrders = JSON.parse(storedOrders) as ServiceOrder[];
     return Array.isArray(parsedOrders)
       ? parsedOrders.map(normalizeOrder)
-      : exampleOrders.map(normalizeOrder);
+      : [];
   } catch {
-    return exampleOrders.map(normalizeOrder);
+    lastStorageError =
+      "Os dados de Ordens de Serviço salvos no navegador parecem corrompidos ou indisponíveis. Nenhum dado de exemplo foi carregado para evitar confusão.";
+    return [];
   }
 }
 
 export function saveStoredOrders(orders: ServiceOrder[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
+    lastStorageError = "";
+  } catch {
+    lastStorageError =
+      "Não foi possível salvar as Ordens de Serviço. O armazenamento local pode estar cheio ou indisponível.";
+    throw new Error(lastStorageError);
+  }
 }
 
 export function createNextOrderCode(orders: ServiceOrder[]) {

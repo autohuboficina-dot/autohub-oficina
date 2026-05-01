@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
-import { getEstoque, type EstoqueItem, type EstoqueMovimentacao } from "./estoqueStorage";
+import {
+  getEstoque,
+  type EstoqueItem,
+  type EstoqueMovimentacao,
+} from "../../services/estoqueService";
 
 function formatCurrency(value: number) {
   return value.toLocaleString("pt-BR", {

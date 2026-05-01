@@ -1,16 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import BackButton from "../../components/ui/BackButton";
+import { formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   getBudgetApprovalBadgeClass,
   getBudgetApprovalLabel,
   getServiceOrderStatusForBudgetDecision,
   getStoredOrders,
   saveStoredOrders,
+  updateServiceOrderStatusWithTimeline,
   type BudgetApprovalStatus,
   type ServiceOrder,
-} from "../os/osStorage";
-import { getCotacoes, updateCotacao } from "../compras/comprasStorage";
-import { getConfiguracoesOficina } from "../configuracoes/configuracoesStorage";
+} from "../../services/osService";
+import { getCotacoes, updateCotacao } from "../../services/cotacoesService";
+import {
+  calculatePaymentSimulation,
+  getConfiguracoesOficina,
+} from "../../services/configuracoesService";
 
 type ApprovalItem = {
   id: string;
@@ -198,6 +204,11 @@ export default function OrcamentoView() {
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [isEditingItems, setIsEditingItems] = useState(false);
+  const [isSubmittingDecision, setIsSubmittingDecision] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<
+    "Pix" | "Dinheiro" | "Débito" | "Crédito"
+  >("Pix");
+  const [selectedInstallments, setSelectedInstallments] = useState(1);
   const [feedback, setFeedback] = useState("");
 
   const order = useMemo(
@@ -215,44 +226,78 @@ export default function OrcamentoView() {
   const hasDecision = Boolean(
     order && order.statusAprovacao !== "pendente",
   );
+  const defaultSelectedItemIds = useMemo(() => {
+    if (!order) {
+      return [];
+    }
+
+    return order.statusAprovacao !== "pendente"
+      ? order.itensAprovados
+      : approvalItems.map((item) => item.id);
+  }, [approvalItems, order]);
+  const activeSelectedItemIds = selectedItemIds.length
+    ? selectedItemIds
+    : defaultSelectedItemIds;
   const canEditItems = !hasDecision && isEditingItems;
   const selectedTotals = useMemo(
     () =>
       order
-        ? calculateSelectedTotals(order, approvalItems, selectedItemIds)
+        ? calculateSelectedTotals(order, approvalItems, activeSelectedItemIds)
         : {
             partsTotal: 0,
             laborTotal: 0,
             discountAmount: 0,
             finalTotal: 0,
           },
-    [approvalItems, order, selectedItemIds],
+    [activeSelectedItemIds, approvalItems, order],
   );
-
-  useEffect(() => {
-    if (!order) {
-      return;
-    }
-
-    if (order.statusAprovacao !== "pendente") {
-      setSelectedItemIds(order.itensAprovados);
-      setIsEditingItems(false);
-      return;
-    }
-
-    setSelectedItemIds(approvalItems.map((item) => item.id));
-  }, [approvalItems, order]);
+  const paymentSimulation = useMemo(
+    () =>
+      order
+        ? calculatePaymentSimulation(
+            selectedTotals.finalTotal,
+            order.entradaCalculada,
+            order.exigeEntrada,
+            oficinaConfig.regrasPagamento,
+            selectedPaymentMethod,
+            selectedInstallments,
+          )
+        : {
+            saldoBase: 0,
+            descontoAplicado: 0,
+            taxaAplicada: 0,
+            valorFinalPagamento: 0,
+            parcelas: 1,
+            valorParcela: 0,
+          },
+    [
+      oficinaConfig.regrasPagamento,
+      order,
+      selectedInstallments,
+      selectedPaymentMethod,
+      selectedTotals.finalTotal,
+    ],
+  );
+  const customerPhotos = useMemo(
+    () =>
+      (order?.fotosOs || []).filter(
+        (photo) =>
+          photo.visibilidade === "Cliente" || photo.visibilidade === "Ambos",
+      ),
+    [order],
+  );
 
   function toggleApprovalItem(itemId: string) {
     if (!canEditItems) {
       return;
     }
 
-    setSelectedItemIds((currentItems) =>
-      currentItems.includes(itemId)
-        ? currentItems.filter((currentItem) => currentItem !== itemId)
-        : [...currentItems, itemId],
-    );
+    setSelectedItemIds((currentItems) => {
+      const baseItems = currentItems.length ? currentItems : defaultSelectedItemIds;
+      return baseItems.includes(itemId)
+        ? baseItems.filter((currentItem) => currentItem !== itemId)
+        : [...baseItems, itemId];
+    });
   }
 
   function removeApprovalItem(itemId: string) {
@@ -260,24 +305,51 @@ export default function OrcamentoView() {
       return;
     }
 
-    setSelectedItemIds((currentItems) =>
-      currentItems.filter((currentItem) => currentItem !== itemId),
+    setSelectedItemIds((currentItems) => {
+      const baseItems = currentItems.length ? currentItems : defaultSelectedItemIds;
+      return baseItems.filter((currentItem) => currentItem !== itemId);
+    });
+  }
+
+  function hasConcurrentOrderChange() {
+    if (!order) {
+      return false;
+    }
+
+    const currentOrder = getStoredOrders().find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+
+    return Boolean(
+      currentOrder?.updatedAt &&
+        order.updatedAt &&
+        (currentOrder.updatedAt !== order.updatedAt ||
+          currentOrder.version !== order.version),
     );
   }
 
   function handleApproveBudget() {
-    if (!order || hasDecision) {
+    if (!order || hasDecision || isSubmittingDecision) {
       return;
     }
 
+    if (hasConcurrentOrderChange()) {
+      setFeedback(
+        "Este orçamento foi atualizado pela oficina. Recarregue a página antes de responder.",
+      );
+      return;
+    }
+
+    setIsSubmittingDecision(true);
     const allItemIds = approvalItems.map((item) => item.id);
     const hasPartialSelection =
-      approvalItems.length > 0 && selectedItemIds.length < approvalItems.length;
+      approvalItems.length > 0 &&
+      activeSelectedItemIds.length < approvalItems.length;
     const statusAprovacao: BudgetApprovalStatus = hasPartialSelection
       ? "pre_aprovado_parcial"
       : "pre_aprovado";
     const itensAprovados =
-      statusAprovacao === "pre_aprovado" ? allItemIds : selectedItemIds;
+      statusAprovacao === "pre_aprovado" ? allItemIds : activeSelectedItemIds;
     const dataDecisaoAprovacao = new Date().toISOString();
 
     const updatedOrders = orders.map((storedOrder) => {
@@ -294,19 +366,40 @@ export default function OrcamentoView() {
         confirmacaoOficina: false,
         dataConfirmacaoOficina: "",
         decisaoCliente: statusAprovacao,
+        formaPagamentoEscolhida: selectedPaymentMethod,
+        parcelasEscolhidas: paymentSimulation.parcelas,
+        valorFinalPagamento: paymentSimulation.valorFinalPagamento,
+        descontoAplicado: paymentSimulation.descontoAplicado,
+        taxaAplicada: paymentSimulation.taxaAplicada,
+        descontoPagamentoAplicado: paymentSimulation.descontoAplicado,
+        taxaPagamentoAplicada: paymentSimulation.taxaAplicada,
+        entradaCalculada: order.entradaCalculada,
+        saldoRestante: paymentSimulation.saldoBase,
         observacaoAprovacao:
           statusAprovacao === "pre_aprovado_parcial"
             ? "Cliente pré-aprovou parcialmente os itens."
             : "",
       };
 
-      return {
-        ...updatedOrder,
-        status: getServiceOrderStatusForBudgetDecision(
-          updatedOrder,
-          statusAprovacao,
-        ),
-      };
+      return updateServiceOrderStatusWithTimeline(
+        updatedOrder,
+        getServiceOrderStatusForBudgetDecision(updatedOrder, statusAprovacao),
+        {
+          tipo:
+            statusAprovacao === "pre_aprovado_parcial"
+              ? "cliente_aprovou_parcialmente"
+              : "cliente_aprovou",
+          titulo:
+            statusAprovacao === "pre_aprovado_parcial"
+              ? "Cliente pré-aprovou parcialmente"
+              : "Cliente pré-aprovou orçamento",
+          descricao:
+            statusAprovacao === "pre_aprovado_parcial"
+              ? "Cliente selecionou parte dos itens do orçamento."
+              : "Cliente pré-aprovou todos os itens do orçamento.",
+          usuarioResponsavel: "Cliente",
+        },
+      );
     });
 
     saveStoredOrders(updatedOrders);
@@ -314,15 +407,23 @@ export default function OrcamentoView() {
     setOrders(updatedOrders);
     setIsEditingItems(false);
     setFeedback(
-      "Seu orçamento foi pré-aprovado com sucesso. Por segurança, a oficina entrará em contato por telefone ou WhatsApp para confirmar sua autorização antes de iniciar o serviço.",
+      "Seu orçamento foi pré-aprovado com sucesso. Após sua pré-aprovação, entraremos em contato por segurança antes de iniciar o serviço.",
     );
   }
 
   function handleRejectBudget() {
-    if (!order || hasDecision) {
+    if (!order || hasDecision || isSubmittingDecision) {
       return;
     }
 
+    if (hasConcurrentOrderChange()) {
+      setFeedback(
+        "Este orçamento foi atualizado pela oficina. Recarregue a página antes de responder.",
+      );
+      return;
+    }
+
+    setIsSubmittingDecision(true);
     const statusAprovacao: BudgetApprovalStatus = "recusado";
     const dataDecisaoAprovacao = new Date().toISOString();
 
@@ -343,13 +444,16 @@ export default function OrcamentoView() {
         observacaoAprovacao: "Cliente recusou o orçamento.",
       };
 
-      return {
-        ...updatedOrder,
-        status: getServiceOrderStatusForBudgetDecision(
-          updatedOrder,
-          statusAprovacao,
-        ),
-      };
+      return updateServiceOrderStatusWithTimeline(
+        updatedOrder,
+        getServiceOrderStatusForBudgetDecision(updatedOrder, statusAprovacao),
+        {
+          tipo: "cliente_recusou",
+          titulo: "Cliente recusou orçamento",
+          descricao: "Cliente recusou o orçamento pelo link público.",
+          usuarioResponsavel: "Cliente",
+        },
+      );
     });
 
     saveStoredOrders(updatedOrders);
@@ -360,10 +464,18 @@ export default function OrcamentoView() {
   }
 
   function handleRequestRevision() {
-    if (!order || hasDecision) {
+    if (!order || hasDecision || isSubmittingDecision) {
       return;
     }
 
+    if (hasConcurrentOrderChange()) {
+      setFeedback(
+        "Este orçamento foi atualizado pela oficina. Recarregue a página antes de responder.",
+      );
+      return;
+    }
+
+    setIsSubmittingDecision(true);
     const statusAprovacao: BudgetApprovalStatus = "revisao";
     const dataDecisaoAprovacao = new Date().toISOString();
     const updatedOrders = orders.map((storedOrder) => {
@@ -383,19 +495,40 @@ export default function OrcamentoView() {
         observacaoAprovacao: "Cliente solicitou revisão do orçamento.",
       };
 
-      return {
-        ...updatedOrder,
-        status: getServiceOrderStatusForBudgetDecision(
-          updatedOrder,
-          statusAprovacao,
-        ),
-      };
+      return updateServiceOrderStatusWithTimeline(
+        updatedOrder,
+        getServiceOrderStatusForBudgetDecision(updatedOrder, statusAprovacao),
+        {
+          tipo: "cliente_pediu_revisao",
+          titulo: "Cliente solicitou revisão",
+          descricao: "Cliente pediu revisão do orçamento pelo link público.",
+          usuarioResponsavel: "Cliente",
+        },
+      );
     });
 
     saveStoredOrders(updatedOrders);
     setOrders(updatedOrders);
     setIsEditingItems(false);
     setFeedback("Solicitação de revisão enviada com sucesso.");
+  }
+
+  function getWhatsAppPhone(value: string) {
+    const digits = onlyDigits(value);
+
+    if (!digits) {
+      return "";
+    }
+
+    if (digits.startsWith("55")) {
+      return digits;
+    }
+
+    if (digits.length === 10 || digits.length === 11) {
+      return `55${digits}`;
+    }
+
+    return digits;
   }
 
   if (!order) {
@@ -414,12 +547,21 @@ export default function OrcamentoView() {
   const answeredText = `Orçamento respondido em ${formatAnswerDate(
     order.dataDecisaoAprovacao,
   )}`;
-  const approvedItemsCount = selectedItemIds.length;
+  const approvedItemsCount = activeSelectedItemIds.length;
   const canApprove =
-    !hasDecision && (!approvalItems.length || selectedItemIds.length > 0);
+    !hasDecision && (!approvalItems.length || activeSelectedItemIds.length > 0);
+  const serviceCount = approvalItems.filter((item) => item.tipo === "Serviço").length;
+  const partCount = approvalItems.filter((item) => item.tipo === "Peça").length;
+  const whatsappPhone = getWhatsAppPhone(oficinaConfig.whatsapp);
+  const whatsappMessage = `Olá, tenho uma dúvida sobre o orçamento ${order.id}.`;
+  const whatsappLink = whatsappPhone
+    ? `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(whatsappMessage)}`
+    : "";
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 pb-8">
+      <BackButton />
+
       <header className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-sm shadow-slate-950/20">
         <div className="grid gap-6 p-6 lg:grid-cols-[1fr_280px] lg:p-8">
           <div>
@@ -429,6 +571,27 @@ export default function OrcamentoView() {
             <h1 className="mt-2 text-4xl font-bold tracking-normal text-white">
               Seu orçamento está pronto
             </h1>
+            <div className="mt-4 inline-flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-100">
+              <span>Valor total: {formatCurrency(selectedTotals.finalTotal)}</span>
+              <span className="text-emerald-300/60">|</span>
+              <span>
+                {serviceCount} {serviceCount === 1 ? "serviço" : "serviços"}
+              </span>
+              <span className="text-emerald-300/60">|</span>
+              <span>
+                {partCount} {partCount === 1 ? "peça" : "peças"}
+              </span>
+            </div>
+            {order.exigeEntrada && (
+              <div className="mt-3 flex flex-wrap gap-3 text-sm text-amber-100">
+                <span className="rounded-full bg-amber-500/15 px-3 py-1 ring-1 ring-amber-400/30">
+                  Entrada: {formatCurrency(order.entradaCalculada)}
+                </span>
+                <span className="rounded-full bg-slate-800 px-3 py-1 text-slate-200">
+                  Saldo restante: {formatCurrency(order.saldoRestante)}
+                </span>
+              </div>
+            )}
             <p className="mt-3 max-w-2xl text-base text-slate-300">
               Olá, {order.cliente}. Revise os itens recomendados para o seu{" "}
               {order.veiculo || "veículo"} e aprove apenas o que deseja
@@ -441,7 +604,9 @@ export default function OrcamentoView() {
                 <p className="mt-1 font-semibold text-slate-100">
                   {order.cliente}
                 </p>
-                <p className="text-sm text-slate-400">{order.telefone}</p>
+                <p className="text-sm text-slate-400">
+                  {formatPhone(order.telefone)}
+                </p>
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -462,7 +627,8 @@ export default function OrcamentoView() {
               {oficinaConfig.nomeOficina}
             </p>
             <p className="mt-1 text-sm text-slate-300">
-              Telefone/WhatsApp: {oficinaConfig.whatsapp || "A combinar"}
+              Telefone/WhatsApp:{" "}
+              {formatPhone(oficinaConfig.whatsapp) || "A combinar"}
             </p>
             {oficinaConfig.textoPadraoOrcamento && (
               <p className="mt-3 text-sm text-slate-300">
@@ -492,6 +658,30 @@ export default function OrcamentoView() {
         </section>
       )}
 
+      <section className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-emerald-100">
+              Dúvidas? Fale com a oficina no WhatsApp
+            </h2>
+            <p className="mt-1 text-sm text-emerald-100/80">
+              {formatPhone(oficinaConfig.whatsapp) || "WhatsApp não configurado"}
+            </p>
+          </div>
+
+          {whatsappLink && (
+            <a
+              href={whatsappLink}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-xl bg-emerald-500 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-emerald-400"
+            >
+              Abrir WhatsApp
+            </a>
+          )}
+        </div>
+      </section>
+
       <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
         <h2 className="text-xl font-bold text-sky-300">Serviço inicial</h2>
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -515,7 +705,55 @@ export default function OrcamentoView() {
             </p>
           </div>
         </div>
+
+        {(order.diagnostico.defeitoEncontrado ||
+          order.diagnostico.causaProvavel) && (
+          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <span className="text-xs uppercase text-slate-500">
+              Explicação da oficina
+            </span>
+            <p className="mt-2 whitespace-pre-wrap text-slate-200">
+              {[
+                order.diagnostico.defeitoEncontrado
+                  ? `Defeito encontrado: ${order.diagnostico.defeitoEncontrado}`
+                  : "",
+                order.diagnostico.causaProvavel
+                  ? `Causa provável: ${order.diagnostico.causaProvavel}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("\n")}
+            </p>
+          </div>
+        )}
       </section>
+
+      {customerPhotos.length > 0 && (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="text-xl font-bold text-sky-300">Fotos da OS</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Imagens liberadas pela oficina para ajudar na análise do orçamento.
+          </p>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            {customerPhotos.map((photo) => (
+              <figure
+                key={photo.id}
+                className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950"
+              >
+                <img
+                  src={photo.dataUrl}
+                  alt={photo.titulo}
+                  className="h-56 w-full object-cover"
+                />
+                <figcaption className="p-4 text-sm text-slate-400">
+                  <strong className="block text-slate-100">{photo.titulo}</strong>
+                  {photo.tipo}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -629,7 +867,7 @@ export default function OrcamentoView() {
         <div className="mt-5 grid gap-3">
           {approvalItems.length ? (
             approvalItems.map((item) => {
-              const isSelected = selectedItemIds.includes(item.id);
+              const isSelected = activeSelectedItemIds.includes(item.id);
 
               return (
                 <div
@@ -729,6 +967,97 @@ export default function OrcamentoView() {
                 )}
               </div>
             )}
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+              <h3 className="font-semibold text-slate-100">
+                Escolha a forma de pagamento
+              </h3>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {(["Pix", "Dinheiro", "Débito", "Crédito"] as const).map(
+                  (paymentMethod) => (
+                    <label
+                      key={paymentMethod}
+                      className={`rounded-lg border p-3 text-sm ${
+                        selectedPaymentMethod === paymentMethod
+                          ? "border-sky-400 bg-sky-500/10 text-sky-100"
+                          : "border-slate-800 bg-slate-900 text-slate-300"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="payment-method"
+                        className="mr-2 accent-sky-500"
+                        checked={selectedPaymentMethod === paymentMethod}
+                        disabled={hasDecision || isSubmittingDecision}
+                        onChange={() => setSelectedPaymentMethod(paymentMethod)}
+                      />
+                      {paymentMethod}
+                    </label>
+                  ),
+                )}
+              </div>
+
+              {selectedPaymentMethod === "Crédito" && (
+                <div className="mt-4">
+                  <label className="mb-2 block text-sm font-medium text-slate-300">
+                    Parcelas
+                  </label>
+                  <select
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500"
+                    value={selectedInstallments}
+                    disabled={hasDecision || isSubmittingDecision}
+                    onChange={(event) =>
+                      setSelectedInstallments(Number(event.target.value))
+                    }
+                  >
+                    {Array.from(
+                      { length: oficinaConfig.regrasPagamento.credito.maxParcelas },
+                      (_, index) => {
+                        const installments = index + 1;
+                        const optionSimulation = calculatePaymentSimulation(
+                          selectedTotals.finalTotal,
+                          order.entradaCalculada,
+                          order.exigeEntrada,
+                          oficinaConfig.regrasPagamento,
+                          "Crédito",
+                          installments,
+                        );
+
+                        return (
+                          <option key={installments} value={installments}>
+                            {installments}x de{" "}
+                            {formatCurrency(optionSimulation.valorParcela)}
+                            {installments <=
+                            oficinaConfig.regrasPagamento.credito.parcelasSemJuros
+                              ? " sem juros"
+                              : ""}
+                          </option>
+                        );
+                      },
+                    )}
+                  </select>
+                </div>
+              )}
+
+              <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900 p-3 text-sm">
+                <p className="text-slate-400">
+                  Base para pagamento: {formatCurrency(paymentSimulation.saldoBase)}
+                </p>
+                <p className="mt-1 text-slate-400">
+                  Desconto: {formatCurrency(paymentSimulation.descontoAplicado)} ·
+                  Taxa: {formatCurrency(paymentSimulation.taxaAplicada)}
+                </p>
+                <p className="mt-2 text-lg font-bold text-white">
+                  Valor final da forma escolhida:{" "}
+                  {formatCurrency(paymentSimulation.valorFinalPagamento)}
+                </p>
+                {selectedPaymentMethod === "Crédito" && (
+                  <p className="mt-1 text-sm text-slate-400">
+                    {paymentSimulation.parcelas}x de{" "}
+                    {formatCurrency(paymentSimulation.valorParcela)}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="rounded-2xl border border-sky-400/30 bg-sky-500/10 p-5 text-center">
@@ -744,27 +1073,34 @@ export default function OrcamentoView() {
 
       {!hasDecision ? (
         <section className="sticky bottom-0 -mx-4 border-t border-slate-800 bg-slate-950/95 px-4 py-4 backdrop-blur sm:mx-0 sm:rounded-2xl sm:border sm:px-5">
+          <p className="mb-3 text-center text-sm font-semibold text-slate-200">
+            Revise os itens abaixo e escolha como deseja prosseguir:
+          </p>
           <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm font-medium text-amber-100">
-            Importante: após sua pré-aprovação, a oficina fará uma confirmação
-            por telefone ou WhatsApp antes de iniciar o serviço.
+            Importante: Após sua pré-aprovação, entraremos em contato por
+            segurança antes de iniciar o serviço.
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center">
             <button
               type="button"
               onClick={handleApproveBudget}
-              disabled={!canApprove}
-              className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canApprove || isSubmittingDecision}
+              className="rounded-2xl bg-emerald-500 px-8 py-4 text-base font-bold text-white shadow-lg shadow-emerald-950/40 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-[260px]"
             >
-              Pré-aprovar orçamento
+              {isSubmittingDecision ? "Processando..." : "Pré-aprovar orçamento"}
             </button>
 
             <button
               type="button"
               onClick={() => {
+                setSelectedItemIds((currentItems) =>
+                  currentItems.length ? currentItems : defaultSelectedItemIds,
+                );
                 setIsEditingItems((currentValue) => !currentValue);
                 setFeedback("");
               }}
+              disabled={isSubmittingDecision}
               className="rounded-xl border border-sky-400/40 px-5 py-3 text-sm font-semibold text-sky-200 hover:bg-sky-500/10"
             >
               Ajustar itens (modo edição)
@@ -773,6 +1109,7 @@ export default function OrcamentoView() {
             <button
               type="button"
               onClick={handleRejectBudget}
+              disabled={isSubmittingDecision}
               className="rounded-xl border border-red-400/40 px-5 py-3 text-sm font-semibold text-red-200 hover:bg-red-500/10"
             >
               Recusar
@@ -781,6 +1118,7 @@ export default function OrcamentoView() {
             <button
               type="button"
               onClick={handleRequestRevision}
+              disabled={isSubmittingDecision}
               className="rounded-xl border border-cyan-400/40 px-5 py-3 text-sm font-semibold text-cyan-200 hover:bg-cyan-500/10"
             >
               Solicitar revisão
@@ -797,8 +1135,8 @@ export default function OrcamentoView() {
           <p className="mt-1 text-sm text-slate-500">
             {order.statusAprovacao === "pre_aprovado" ||
             order.statusAprovacao === "pre_aprovado_parcial"
-              ? "Por segurança, a oficina entrará em contato por telefone ou WhatsApp para confirmar sua autorização antes de iniciar o serviço."
-              : `Para qualquer alteração, fale com ${oficinaConfig.nomeOficina} pelo WhatsApp ${oficinaConfig.whatsapp || "da oficina"}.`}
+              ? "Após sua pré-aprovação, entraremos em contato por segurança antes de iniciar o serviço."
+              : `Para qualquer alteração, fale com ${oficinaConfig.nomeOficina} pelo WhatsApp ${formatPhone(oficinaConfig.whatsapp) || "da oficina"}.`}
           </p>
         </section>
       )}

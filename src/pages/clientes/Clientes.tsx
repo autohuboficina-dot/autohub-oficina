@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import BackButton from "../../components/ui/BackButton";
+import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
   createClienteVeiculoId,
@@ -10,7 +12,7 @@ import {
   type Cliente,
   type ClienteTipo,
   type ClienteVeiculo,
-} from "./clientesStorage";
+} from "../../services/clientesService";
 
 type ClienteForm = {
   tipo: ClienteTipo;
@@ -50,85 +52,13 @@ function createBlankForm(): ClienteForm {
   };
 }
 
-function onlyDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
-
 function normalizePlate(value: string) {
   return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 }
 
-function formatPhone(value: string) {
-  const digits = onlyDigits(value).slice(0, 11);
-
-  if (digits.length <= 2) {
-    return digits ? `(${digits}` : "";
-  }
-
-  if (digits.length <= 7) {
-    return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  }
-
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-}
-
-function formatCpf(value: string) {
-  const digits = onlyDigits(value).slice(0, 11);
-
-  if (digits.length <= 3) {
-    return digits;
-  }
-
-  if (digits.length <= 6) {
-    return `${digits.slice(0, 3)}.${digits.slice(3)}`;
-  }
-
-  if (digits.length <= 9) {
-    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-  }
-
-  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(
-    6,
-    9,
-  )}-${digits.slice(9)}`;
-}
-
-function formatCnpj(value: string) {
-  const digits = onlyDigits(value).slice(0, 14);
-
-  if (digits.length <= 2) {
-    return digits;
-  }
-
-  if (digits.length <= 5) {
-    return `${digits.slice(0, 2)}.${digits.slice(2)}`;
-  }
-
-  if (digits.length <= 8) {
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
-  }
-
-  if (digits.length <= 12) {
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
-      5,
-      8,
-    )}/${digits.slice(8)}`;
-  }
-
-  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
-    5,
-    8,
-  )}/${digits.slice(8, 12)}-${digits.slice(12)}`;
-}
-
-function formatCpfCnpj(value: string) {
-  const digits = onlyDigits(value);
-  return digits.length > 11 ? formatCnpj(digits) : formatCpf(digits);
-}
-
 export default function Clientes() {
   const navigate = useNavigate();
-  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [clientes, setClientes] = useState<Cliente[]>(() => getClientes());
   const [form, setForm] = useState<ClienteForm>(createBlankForm);
   const [showForm, setShowForm] = useState(false);
   const [editingCliente, setEditingCliente] = useState<Cliente | null>(null);
@@ -166,10 +96,6 @@ export default function Clientes() {
   const sectionClass =
     "rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm shadow-slate-950/20 sm:p-6";
 
-  useEffect(() => {
-    setClientes(getClientes());
-  }, []);
-
   function refreshClientes() {
     setClientes(getClientes());
   }
@@ -193,8 +119,8 @@ export default function Clientes() {
     setForm({
       tipo: cliente.tipo,
       nome: cliente.nome,
-      telefone: cliente.telefone,
-      documento: cliente.documento,
+      telefone: formatPhone(cliente.telefone),
+      documento: formatCpfCnpj(cliente.documento),
       email: cliente.email,
       cidade: cliente.cidade,
       observacoes: cliente.observacoes,
@@ -326,7 +252,8 @@ export default function Clientes() {
     const clienteData = {
       ...form,
       nome: form.nome.trim(),
-      documento: form.documento.trim(),
+      telefone: onlyDigits(form.telefone),
+      documento: onlyDigits(form.documento),
       email: form.email.trim(),
       cidade: form.cidade.trim(),
       observacoes: form.observacoes.trim(),
@@ -349,7 +276,9 @@ export default function Clientes() {
 
   return (
     <div className="max-w-7xl">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-6">
+        {(showForm || selectedCliente) && <BackButton className="mb-4" />}
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-bold">Clientes</h2>
           <p className="mt-2 text-slate-400">
@@ -364,6 +293,7 @@ export default function Clientes() {
         >
           Novo cliente
         </button>
+      </div>
       </div>
 
       <section className={`${sectionClass} mb-6`}>
@@ -748,10 +678,10 @@ export default function Clientes() {
                     {cliente.nome || "Sem nome"}
                   </td>
                   <td className="w-[16%] pr-4 text-slate-300">
-                    {cliente.telefone || "-"}
+                    {formatPhone(cliente.telefone) || "-"}
                   </td>
                   <td className="w-[18%] pr-4 text-slate-300">
-                    {cliente.documento || "-"}
+                    {formatCpfCnpj(cliente.documento) || "-"}
                   </td>
                   <td className="w-[10%] pr-4 text-slate-300">
                     {cliente.veiculos.length}
@@ -835,13 +765,13 @@ export default function Clientes() {
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
               <span className="text-xs uppercase text-slate-500">Telefone</span>
               <p className="mt-1 font-medium">
-                {selectedCliente.telefone || "-"}
+                {formatPhone(selectedCliente.telefone) || "-"}
               </p>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
               <span className="text-xs uppercase text-slate-500">CPF/CNPJ</span>
               <p className="mt-1 font-medium">
-                {selectedCliente.documento || "-"}
+                {formatCpfCnpj(selectedCliente.documento) || "-"}
               </p>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">

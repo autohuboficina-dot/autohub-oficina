@@ -8,7 +8,6 @@ import {
   useLocation,
 } from "react-router-dom";
 import {
-  normalizeRole,
   ROLE_LABELS,
   USER_ROLES,
   type UserRole,
@@ -17,7 +16,6 @@ import Clientes from "./pages/clientes/Clientes";
 import ClienteDetail from "./pages/clientes/ClienteDetail";
 import Compras from "./pages/compras/Compras";
 import Configuracoes from "./pages/configuracoes/Configuracoes";
-import { getConfiguracoesOficina } from "./pages/configuracoes/configuracoesStorage";
 import Dashboard from "./pages/dashboard/Dashboard";
 import Estoque from "./pages/estoque/Estoque";
 import Financeiro from "./pages/financeiro/Financeiro";
@@ -28,8 +26,11 @@ import OSDetail from "./pages/os/OSDetail";
 import OSNew from "./pages/os/OSNew";
 import OrcamentoView from "./pages/orcamento/OrcamentoView";
 import SDR from "./pages/sdr/SDR";
-
-const ROLE_STORAGE_KEY = "autohub:perfil";
+import {
+  getConfiguracoesOficina,
+  getCurrentRole,
+  updateCurrentRole,
+} from "./services/configuracoesService";
 
 type MenuItem = {
   label: string;
@@ -75,11 +76,7 @@ const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
 };
 
 function getInitialRole() {
-  if (typeof window === "undefined") {
-    return "admin";
-  }
-
-  return normalizeRole(localStorage.getItem(ROLE_STORAGE_KEY));
+  return getCurrentRole();
 }
 
 function isActivePath(currentPath: string, itemPath: string) {
@@ -100,7 +97,7 @@ function AppContent() {
 
   function handleRoleChange(role: UserRole) {
     setCurrentRole(role);
-    localStorage.setItem(ROLE_STORAGE_KEY, role);
+    updateCurrentRole(role);
   }
 
   if (isPublicBudgetRoute) {

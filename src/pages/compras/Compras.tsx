@@ -1,29 +1,34 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
+import BackButton from "../../components/ui/BackButton";
+import { formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   getCotacoes,
   saveCotacao,
   updateCotacao,
   type CotacaoFornecedorResponse,
+  type CotacaoPecaEscolha,
+  type CotacaoPecaItem,
   type CotacaoPeca,
+  type CotacaoPecaRespostaItem,
   type CotacaoStatus,
-} from "./comprasStorage";
+} from "../../services/cotacoesService";
 import {
   getFornecedores,
   type Fornecedor,
-} from "../fornecedores/fornecedoresStorage";
+} from "../../services/fornecedoresService";
 import {
   getStoredOrders,
   saveStoredOrders,
+  updateServiceOrderStatusWithTimeline,
   type ServiceOrder,
-} from "../os/osStorage";
-import { addItemEstoque } from "../estoque/estoqueStorage";
-import { getConfiguracoesOficina } from "../configuracoes/configuracoesStorage";
+} from "../../services/osService";
+import { addItemEstoque } from "../../services/estoqueService";
+import { getConfiguracoesOficina } from "../../services/configuracoesService";
 
 type ResponseFormState = {
   fornecedorId: string;
   preco: string;
-  prazo: string;
   marca: string;
   observacao: string;
 };
@@ -31,14 +36,9 @@ type ResponseFormState = {
 const initialResponseForm: ResponseFormState = {
   fornecedorId: "",
   preco: "",
-  prazo: "",
   marca: "",
   observacao: "",
 };
-
-function onlyDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
 
 function getWhatsAppPhone(value: string) {
   const digits = onlyDigits(value);
@@ -78,25 +78,30 @@ function getOrderVehicle(order?: ServiceOrder) {
     modelo: order?.veiculoDados.modelo || order?.veiculoModelo || "",
     ano: order?.veiculoDados.ano || order?.veiculoAno || "",
     motor: order?.veiculoDados.motor || order?.veiculoMotor || "",
+    combustivel:
+      order?.veiculoDados.combustivel || order?.veiculoCombustivel || "",
     placa:
       order?.veiculoDados.placa || order?.veiculoPlaca || order?.placa || "",
+    chassi: order?.veiculoDados.chassiVin || order?.veiculoChassi || "",
   };
 }
 
 function getOrderPhotos(order?: ServiceOrder) {
-  const maybeOrderWithPhotos = order as
-    | (ServiceOrder & {
-        fotos?: string[];
-        fotosOrcamento?: string[];
-        fotosVeiculo?: string[];
-      })
-    | undefined;
+  return (order?.fotosOs || []).filter(
+    (photo) =>
+      photo.visibilidade === "Fornecedor" || photo.visibilidade === "Ambos",
+  );
+}
 
-  return [
-    ...(maybeOrderWithPhotos?.fotos || []),
-    ...(maybeOrderWithPhotos?.fotosOrcamento || []),
-    ...(maybeOrderWithPhotos?.fotosVeiculo || []),
-  ];
+function getOrderParts(order?: ServiceOrder): CotacaoPecaItem[] {
+  return (order?.pecasNecessarias || [])
+    .filter((part) => part.peca.trim())
+    .map((part) => ({
+      id: `peca-${part.id}`,
+      peca: part.peca,
+      quantidade: part.quantidade || 1,
+      observacao: "",
+    }));
 }
 
 function formatDate(value: string) {
@@ -119,17 +124,15 @@ function formatCurrency(value: number) {
   });
 }
 
-function getPrazoNumber(value: string) {
-  const match = value.match(/\d+/);
-  return match ? Number(match[0]) : Number.POSITIVE_INFINITY;
-}
-
 function getCotacaoStatusBadgeClass(status: CotacaoStatus) {
   const classes: Record<CotacaoStatus, string> = {
     "Cotação enviada": "bg-sky-500/15 text-sky-200 ring-sky-400/30",
     "Resposta recebida": "bg-cyan-500/15 text-cyan-200 ring-cyan-400/30",
     "Fornecedor escolhido":
       "bg-violet-500/15 text-violet-200 ring-violet-400/30",
+    "Cotação parcial": "bg-amber-500/15 text-amber-200 ring-amber-400/30",
+    "Cotação concluída":
+      "bg-emerald-500/15 text-emerald-200 ring-emerald-400/30",
     "Aguardando aprovação do cliente":
       "bg-amber-500/15 text-amber-200 ring-amber-400/30",
     "Aprovada pelo cliente":
@@ -171,35 +174,51 @@ function calculateBudget(order: ServiceOrder) {
 function upsertPartFromCotacao(
   order: ServiceOrder,
   cotacao: CotacaoPeca,
+  cotacaoPart: CotacaoPecaItem,
   response: CotacaoFornecedorResponse,
+  itemResponse: CotacaoPecaRespostaItem,
 ): ServiceOrder {
-  const quantity = Math.max(Number(cotacao.quantidade || 1), 1);
-  const valorTotal = response.preco * quantity;
+  const quantity = Math.max(Number(itemResponse.quantidade || cotacaoPart.quantidade || 1), 1);
+  const valorUnitario = Number(itemResponse.preco || 0);
+  const valorTotal = valorUnitario * quantity;
   const currentParts = Array.isArray(order.pecasNecessarias)
     ? order.pecasNecessarias
     : [];
-  const existingPart = currentParts.find((part) => part.compraId === cotacao.id);
+  const numericPartId = Number(String(cotacaoPart.id).replace(/^peca-/, ""));
+  const existingPart = currentParts.find(
+    (part) =>
+      part.cotacaoPecaId === cotacaoPart.id ||
+      (Number.isFinite(numericPartId) && part.id === numericPartId) ||
+      (part.compraId === cotacao.id && part.peca === cotacaoPart.peca),
+  );
   const nextPartId =
     currentParts.reduce((max, part) => Math.max(max, Number(part.id || 0)), 0) +
     1;
   const updatedPart = {
+    ...existingPart,
     id: existingPart?.id || nextPartId,
-    peca: cotacao.peca,
+    peca: existingPart?.peca || cotacaoPart.peca || itemResponse.nomePeca,
     quantidade: quantity,
-    valorUnitario: response.preco,
+    valorUnitario,
     valorTotal,
     compraId: cotacao.id,
+    cotacaoPecaId: cotacaoPart.id,
+    cotacaoFornecedorEscolhido: response.fornecedorNome,
+    cotacaoPrecoEscolhido: valorUnitario,
+    cotacaoMarcaEscolhida: itemResponse.marca,
+    cotacaoObservacaoEscolhida: itemResponse.observacaoFornecedor,
+    cotacaoDataEscolha: new Date().toISOString(),
   };
   const pecasNecessarias = existingPart
     ? currentParts.map((part) =>
-        part.compraId === cotacao.id ? updatedPart : part,
+        part.id === existingPart.id ? updatedPart : part,
       )
     : [...currentParts, updatedPart];
   const updatedOrder = {
     ...order,
     pecasNecessarias,
     cotacaoFornecedorEscolhido: response.fornecedorNome,
-    cotacaoPrecoFinalPeca: response.preco,
+    cotacaoPrecoFinalPeca: valorUnitario,
     cotacaoIdEscolhida: cotacao.id,
   };
 
@@ -207,6 +226,38 @@ function upsertPartFromCotacao(
     ...updatedOrder,
     orcamento: calculateBudget(updatedOrder),
   };
+}
+
+function getResponseForPart(
+  response: CotacaoFornecedorResponse,
+  pecaId: string,
+) {
+  return response.itemResponses.find((item) => item.pecaId === pecaId);
+}
+
+function getChoiceForPart(cotacao: CotacaoPeca, pecaId: string) {
+  return cotacao.pecasEscolhidas.find((choice) => choice.pecaId === pecaId);
+}
+
+function getCotacaoStatusAfterChoice(
+  cotacao: CotacaoPeca,
+  choices: CotacaoPecaEscolha[],
+): CotacaoStatus {
+  const selectedCount = cotacao.pecas.filter((part) =>
+    choices.some((choice) => choice.pecaId === part.id),
+  ).length;
+
+  if (selectedCount >= cotacao.pecas.length && cotacao.pecas.length > 0) {
+    return "Cotação concluída";
+  }
+
+  if (selectedCount > 0) {
+    return "Cotação parcial";
+  }
+
+  return cotacao.status === "Cotação enviada"
+    ? "Resposta recebida"
+    : cotacao.status;
 }
 
 export default function Compras() {
@@ -225,6 +276,10 @@ export default function Compras() {
   );
   const linkedOrderPhotos = useMemo(
     () => getOrderPhotos(linkedOrder),
+    [linkedOrder],
+  );
+  const linkedOrderParts = useMemo(
+    () => getOrderParts(linkedOrder),
     [linkedOrder],
   );
   const initialPiece =
@@ -279,18 +334,50 @@ export default function Compras() {
       return;
     }
 
+    const quoteItems = linkedOrderParts.length
+      ? linkedOrderParts
+      : [
+          {
+            id: "peca-manual-1",
+            peca: item.trim(),
+            quantidade: Math.max(Number(quantidade || 1), 1),
+            observacao: "",
+          },
+        ];
+    const mainQuoteItem = quoteItems[0];
     const newCotacao = saveCotacao({
       osId: linkedOrder?.id || "",
+      oficinaNome: oficinaConfig.nomeOficina,
       fornecedorId: selectedFornecedor.id,
       fornecedorNome: selectedFornecedor.nome,
       fornecedorWhatsapp: selectedFornecedor.whatsapp,
-      peca: item.trim(),
-      quantidade: Math.max(Number(quantidade || 1), 1),
+      peca: mainQuoteItem.peca,
+      quantidade: mainQuoteItem.quantidade,
+      pecas: quoteItems,
       urgencia,
       observacao: observacoes.trim(),
       fotos: linkedOrderPhotos,
+      clienteNome: linkedOrder?.clienteDados.nome || linkedOrder?.cliente || "",
+      clienteTelefone:
+        linkedOrder?.clienteDados.telefone ||
+        linkedOrder?.clienteTelefone ||
+        linkedOrder?.telefone ||
+        "",
       veiculo: linkedOrderVehicle,
     });
+    if (linkedOrder) {
+      const updatedOrders = getStoredOrders().map((order) =>
+        order.id === linkedOrder.id || order.codigo === linkedOrder.id
+          ? updateServiceOrderStatusWithTimeline(order, "AGUARDANDO_COTACAO", {
+              tipo: "cotacao_solicitada",
+              titulo: "Cotação solicitada",
+              descricao: `Cotação ${newCotacao.id} enviada para ${selectedFornecedor.nome}.`,
+              usuarioResponsavel: "Compras",
+            })
+          : order,
+      );
+      saveStoredOrders(updatedOrders);
+    }
     const responseLink = `${window.location.origin}/fornecedor/cotacao/${newCotacao.id}`;
     const message = [
       `${oficinaConfig.nomeOficina} - solicitação de cotação`,
@@ -310,14 +397,17 @@ export default function Compras() {
           .join(" ") || "não informado"
       }`,
       `Motor: ${linkedOrderVehicle.motor || "não informado"}`,
+      `Combustível: ${linkedOrderVehicle.combustivel || "não informado"}`,
       `Placa: ${linkedOrderVehicle.placa || "não informada"}`,
+      `Chassi/VIN: ${linkedOrderVehicle.chassi || "não informado"}`,
       "",
-      `Peça solicitada: ${item.trim()}.`,
-      `Quantidade: ${quantidade || "1"}.`,
-      `Urgência: ${urgencia}.`,
-      observacoes.trim() ? `Observações: ${observacoes.trim()}.` : "",
+      "Peças solicitadas:",
+      ...quoteItems.map(
+        (quoteItem) =>
+          `- ${quoteItem.peca} | Quantidade: ${quoteItem.quantidade}`,
+      ),
       linkedOrderPhotos.length
-        ? `Fotos vinculadas na OS: ${linkedOrderPhotos.join(", ")}.`
+        ? `Fotos técnicas disponíveis no link da cotação: ${responseLink}.`
         : "",
       "",
       `Responda a cotação neste link: ${responseLink}`,
@@ -367,13 +457,25 @@ export default function Compras() {
       responses: [
         ...cotacao.responses,
         {
+          cotacaoId: cotacao.id,
           fornecedorId: fornecedor.id,
           fornecedorNome: fornecedor.nome,
           preco,
-          prazo: responseForm.prazo.trim(),
+          prazo: "",
           marca: responseForm.marca.trim(),
           observacao: responseForm.observacao.trim(),
           dataResposta: new Date().toISOString(),
+          itemResponses: [
+            {
+              pecaId: cotacao.pecas[0]?.id || "peca-1",
+              nomePeca: cotacao.pecas[0]?.peca || cotacao.peca,
+              quantidade: cotacao.pecas[0]?.quantidade || cotacao.quantidade,
+              preco,
+              marca: responseForm.marca.trim(),
+              observacaoFornecedor: responseForm.observacao.trim(),
+              dataHora: new Date().toISOString(),
+            },
+          ],
         },
       ],
     });
@@ -383,6 +485,19 @@ export default function Compras() {
         currentCotacao.id === cotacao.id ? updatedCotacao : currentCotacao,
       ),
     );
+    if (cotacao.osId) {
+      const updatedOrders = getStoredOrders().map((order) =>
+        order.id === cotacao.osId || order.codigo === cotacao.osId
+          ? updateServiceOrderStatusWithTimeline(order, "COTACAO_RECEBIDA", {
+              tipo: "resposta_fornecedor",
+              titulo: "Resposta de fornecedor recebida",
+              descricao: `${fornecedor.nome} respondeu a cotação ${cotacao.id}.`,
+              usuarioResponsavel: "Compras",
+            })
+          : order,
+      );
+      saveStoredOrders(updatedOrders);
+    }
     setResponseForm(initialResponseForm);
     setActiveResponseCotacaoId("");
     setFeedback("Resposta do fornecedor adicionada.");
@@ -390,27 +505,66 @@ export default function Compras() {
 
   function handleChooseSupplier(
     cotacao: CotacaoPeca,
+    cotacaoPart: CotacaoPecaItem,
     response: CotacaoFornecedorResponse,
+    itemResponse: CotacaoPecaRespostaItem,
   ) {
     const hasLinkedOrder = Boolean(cotacao.osId);
+    const dataEscolha = new Date().toISOString();
+    const nextChoice: CotacaoPecaEscolha = {
+      pecaId: cotacaoPart.id,
+      nomePeca: itemResponse.nomePeca || cotacaoPart.peca,
+      quantidade: Number(itemResponse.quantidade || cotacaoPart.quantidade || 1),
+      fornecedorId: response.fornecedorId,
+      fornecedorNome: response.fornecedorNome,
+      preco: Number(itemResponse.preco || 0),
+      marca: itemResponse.marca,
+      observacao: itemResponse.observacaoFornecedor,
+      dataEscolha,
+    };
+    const nextChoices = [
+      ...cotacao.pecasEscolhidas.filter(
+        (choice) => choice.pecaId !== cotacaoPart.id,
+      ),
+      nextChoice,
+    ];
+    const nextStatus = getCotacaoStatusAfterChoice(cotacao, nextChoices);
+    const totalSelectedValue = nextChoices.reduce(
+      (total, choice) => total + choice.preco * choice.quantidade,
+      0,
+    );
     const updatedCotacao = updateCotacao({
       ...cotacao,
-      status: hasLinkedOrder
-        ? "Aguardando aprovação do cliente"
-        : "Fornecedor escolhido",
+      status: nextStatus,
       fornecedorEscolhidoId: response.fornecedorId,
       fornecedorEscolhidoNome: response.fornecedorNome,
-      precoFinalPeca: response.preco,
+      precoFinalPeca: Number(itemResponse.preco || 0),
       fornecedorSelecionado: response.fornecedorNome,
-      valorSelecionado: response.preco,
-      marcaSelecionada: response.marca,
-      prazoSelecionado: response.prazo,
+      valorSelecionado: totalSelectedValue,
+      marcaSelecionada: itemResponse.marca,
+      prazoSelecionado: "",
+      pecasEscolhidas: nextChoices,
     });
 
-    if (cotacao.osId) {
+    if (hasLinkedOrder) {
       const updatedOrders = getStoredOrders().map((order) =>
         order.id === cotacao.osId || order.codigo === cotacao.osId
-          ? upsertPartFromCotacao(order, cotacao, response)
+          ? updateServiceOrderStatusWithTimeline(
+              upsertPartFromCotacao(
+                order,
+                cotacao,
+                cotacaoPart,
+                response,
+                itemResponse,
+              ),
+              "COTACAO_RECEBIDA",
+              {
+                tipo: "cotacao_escolhida",
+                titulo: "Fornecedor escolhido",
+                descricao: `${response.fornecedorNome} escolhido para ${cotacaoPart.peca}.`,
+                usuarioResponsavel: "Compras",
+              },
+            )
           : order,
       );
       saveStoredOrders(updatedOrders);
@@ -423,8 +577,8 @@ export default function Compras() {
     );
     setFeedback(
       cotacao.osId
-        ? `Fornecedor escolhido e peça adicionada ao orçamento da OS ${cotacao.osId}.`
-        : `Fornecedor escolhido: ${response.fornecedorNome}.`,
+        ? `Fornecedor escolhido para ${cotacaoPart.peca} e orçamento da OS ${cotacao.osId} atualizado.`
+        : `Fornecedor escolhido para ${cotacaoPart.peca}: ${response.fornecedorNome}.`,
     );
   }
 
@@ -524,7 +678,9 @@ export default function Compras() {
 
   return (
     <div className="max-w-5xl">
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+      <div className="mb-6">
+        <BackButton className="mb-4" />
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-3xl font-bold">Compras</h2>
           <p className="mt-2 text-slate-400">
@@ -536,6 +692,7 @@ export default function Compras() {
           <span className="font-semibold text-sky-300">{cotacoes.length}</span>{" "}
           cotação(ões)
         </div>
+      </div>
       </div>
 
       {feedback && (
@@ -559,6 +716,14 @@ export default function Compras() {
               <p className="mt-1 text-sm text-slate-300">
                 Cliente: {linkedOrder.clienteDados.nome || linkedOrder.cliente}
               </p>
+              <p className="mt-1 text-sm text-slate-400">
+                Telefone:{" "}
+                {formatPhone(
+                  linkedOrder.clienteDados.telefone ||
+                    linkedOrder.clienteTelefone ||
+                    linkedOrder.telefone,
+                ) || "-"}
+              </p>
             </div>
 
             <div>
@@ -575,9 +740,35 @@ export default function Compras() {
                   .join(" ") || "Veículo não informado"}
               </p>
               <p className="mt-1 text-sm text-slate-300">
-                Motor {linkedOrderVehicle.motor || "-"} · Placa{" "}
-                {linkedOrderVehicle.placa || "-"}
+                Motor {linkedOrderVehicle.motor || "-"} ·{" "}
+                {linkedOrderVehicle.combustivel || "-"} · Placa{" "}
+                {linkedOrderVehicle.placa || "-"} · Chassi{" "}
+                {linkedOrderVehicle.chassi || "-"}
               </p>
+            </div>
+
+            <div className="md:col-span-2">
+              <span className="text-xs uppercase text-sky-200">
+                Peças da OS
+              </span>
+              {linkedOrderParts.length > 0 ? (
+                <div className="mt-2 grid gap-2">
+                  {linkedOrderParts.map((part, index) => (
+                    <div
+                      key={`${part.peca}-${index}`}
+                      className="rounded-lg border border-sky-400/20 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"
+                    >
+                      {part.peca} · Qtd. {part.quantidade}
+                      {part.observacao ? ` · ${part.observacao}` : ""}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                  Esta OS ainda não possui peças cadastradas. Informe a peça
+                  manualmente antes de enviar a cotação.
+                </div>
+              )}
             </div>
 
             {linkedOrderPhotos.length > 0 && (
@@ -585,9 +776,26 @@ export default function Compras() {
                 <span className="text-xs uppercase text-sky-200">
                   Fotos vinculadas
                 </span>
-                <p className="mt-1 break-words text-sm text-slate-300">
-                  {linkedOrderPhotos.join(", ")}
-                </p>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  {linkedOrderPhotos.map((photo) => (
+                    <figure
+                      key={photo.id}
+                      className="overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+                    >
+                      <img
+                        src={photo.dataUrl}
+                        alt={photo.titulo}
+                        className="h-32 w-full object-cover"
+                      />
+                      <figcaption className="p-3 text-xs text-slate-400">
+                        <strong className="block text-slate-200">
+                          {photo.titulo}
+                        </strong>
+                        {photo.tipo} · {photo.visibilidade}
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -625,7 +833,8 @@ export default function Compras() {
                 {selectedFornecedor.nome}
               </p>
               <p className="mt-1 text-slate-400">
-                WhatsApp: {selectedFornecedor.whatsapp || "não informado"}
+                WhatsApp:{" "}
+                {formatPhone(selectedFornecedor.whatsapp) || "não informado"}
               </p>
               {selectedFornecedor.observacoes && (
                 <p className="mt-1 text-slate-500">
@@ -656,7 +865,9 @@ export default function Compras() {
                       linkedOrderVehicle.modelo,
                       linkedOrderVehicle.ano,
                       linkedOrderVehicle.motor,
+                      linkedOrderVehicle.combustivel,
                       linkedOrderVehicle.placa,
+                      linkedOrderVehicle.chassi,
                     ]
                       .filter(Boolean)
                       .join(" · ") || "Veículo não informado"
@@ -740,19 +951,10 @@ export default function Compras() {
         <div className="grid gap-3">
           {cotacoes.length ? (
             cotacoes.map((cotacao) => {
-              const bestPrice = cotacao.responses.length
-                ? Math.min(...cotacao.responses.map((response) => response.preco))
-                : 0;
-              const bestDeadline = cotacao.responses.length
-                ? Math.min(
-                    ...cotacao.responses.map((response) =>
-                      getPrazoNumber(response.prazo),
-                    ),
-                  )
-                : Number.POSITIVE_INFINITY;
               const canConfirm =
                 cotacao.status === "Aprovada pelo cliente" &&
                 Boolean(cotacao.fornecedorEscolhidoId);
+              const selectedChoices = cotacao.pecasEscolhidas;
 
               return (
                 <article
@@ -814,19 +1016,33 @@ export default function Compras() {
                     </p>
                   )}
 
-                  {cotacao.fornecedorSelecionado && (
-                    <div className="mt-4 grid gap-3 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100 md:grid-cols-3">
-                      <span>
-                        Fornecedor:{" "}
-                        <strong>{cotacao.fornecedorSelecionado}</strong>
-                      </span>
-                      <span>
-                        Valor:{" "}
-                        <strong>{formatCurrency(cotacao.valorSelecionado)}</strong>
-                      </span>
-                      <span>
-                        Prazo: <strong>{cotacao.prazoSelecionado || "-"}</strong>
-                      </span>
+                  {selectedChoices.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold">
+                          {selectedChoices.length} de {cotacao.pecas.length}{" "}
+                          peça(s) com fornecedor escolhido
+                        </span>
+                        <span>
+                          Total selecionado:{" "}
+                          <strong>{formatCurrency(cotacao.valorSelecionado)}</strong>
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {selectedChoices.map((choice) => (
+                          <div
+                            key={`${choice.pecaId}-${choice.fornecedorId}`}
+                            className="rounded-lg border border-emerald-400/20 bg-slate-950/50 px-3 py-2"
+                          >
+                            <p className="font-medium">{choice.nomePeca}</p>
+                            <p className="mt-1 text-xs text-emerald-100/80">
+                              {choice.fornecedorNome} ·{" "}
+                              {formatCurrency(choice.preco)} ·{" "}
+                              {choice.marca || "Marca não informada"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -891,21 +1107,6 @@ export default function Compras() {
                         </div>
 
                         <div>
-                          <label className={labelClass}>Prazo</label>
-                          <input
-                            className={inputClass}
-                            placeholder="Ex: 2 dias"
-                            value={responseForm.prazo}
-                            onChange={(event) =>
-                              setResponseForm((currentState) => ({
-                                ...currentState,
-                                prazo: event.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-
-                        <div>
                           <label className={labelClass}>Marca da peça</label>
                           <input
                             className={inputClass}
@@ -949,89 +1150,156 @@ export default function Compras() {
                   )}
 
                   {cotacao.responses.length > 0 && (
-                    <div className="mt-4 overflow-hidden rounded-xl border border-slate-800">
-                      <table className="w-full text-sm">
-                        <thead className="bg-slate-900 text-slate-400">
-                          <tr>
-                            <th className="px-3 py-3 text-left">Fornecedor</th>
-                            <th className="px-3 py-3 text-left">Preço</th>
-                            <th className="px-3 py-3 text-left">Prazo</th>
-                            <th className="px-3 py-3 text-left">Marca</th>
-                            <th className="px-3 py-3 text-left">Ação</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {cotacao.responses.map((response) => {
-                            const isBestPrice = response.preco === bestPrice;
-                            const isBestDeadline =
-                              getPrazoNumber(response.prazo) === bestDeadline;
-                            const isSelected =
-                              response.fornecedorId ===
-                              cotacao.fornecedorEscolhidoId;
+                    <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+                      <div className="mb-4">
+                        <h5 className="font-semibold text-slate-100">
+                          Comparar cotações
+                        </h5>
+                        <p className="mt-1 text-sm text-slate-400">
+                          Escolha uma resposta vencedora para cada peça.
+                        </p>
+                      </div>
 
-                            return (
-                              <tr
-                                key={`${response.fornecedorId}-${response.dataResposta}`}
-                                className="border-t border-slate-800"
-                              >
-                                <td className="px-3 py-3 text-slate-100">
-                                  <p className="font-medium">
-                                    {response.fornecedorNome}
-                                  </p>
-                                  {response.observacao && (
-                                    <p className="mt-1 text-xs text-slate-500">
-                                      {response.observacao}
-                                    </p>
-                                  )}
-                                </td>
-                                <td className="px-3 py-3">
-                                  <span
-                                    className={
-                                      isBestPrice
-                                        ? "rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-200 ring-1 ring-emerald-400/30"
-                                        : "text-slate-300"
-                                    }
-                                  >
-                                    {formatCurrency(response.preco)}
-                                  </span>
-                                </td>
-                                <td className="px-3 py-3">
-                                  <span
-                                    className={
-                                      isBestDeadline
-                                        ? "rounded-full bg-sky-500/15 px-2 py-1 text-xs font-semibold text-sky-200 ring-1 ring-sky-400/30"
-                                        : "text-slate-300"
-                                    }
-                                  >
-                                    {response.prazo || "-"}
-                                  </span>
-                                </td>
-                                <td className="px-3 py-3 text-slate-300">
-                                  {response.marca || "-"}
-                                </td>
-                                <td className="px-3 py-3">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handleChooseSupplier(cotacao, response)
-                                    }
-                                    disabled={
-                                      isSelected ||
-                                      cotacao.status ===
-                                        "Compra confirmada com fornecedor"
-                                    }
-                                    className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                                  >
-                                    {isSelected
-                                      ? "Escolhido"
-                                      : "Escolher fornecedor"}
-                                  </button>
-                                </td>
-                              </tr>
+                      <div className="grid gap-4">
+                        {cotacao.pecas.map((cotacaoPart) => {
+                          const partOptions = cotacao.responses
+                            .map((response) => ({
+                              response,
+                              itemResponse: getResponseForPart(
+                                response,
+                                cotacaoPart.id,
+                              ),
+                            }))
+                            .filter(
+                              (
+                                option,
+                              ): option is {
+                                response: CotacaoFornecedorResponse;
+                                itemResponse: CotacaoPecaRespostaItem;
+                              } => Boolean(option.itemResponse),
                             );
-                          })}
-                        </tbody>
-                      </table>
+                          const bestPrice = partOptions.length
+                            ? Math.min(
+                                ...partOptions.map(
+                                  (option) => option.itemResponse.preco,
+                                ),
+                              )
+                            : 0;
+                          const selectedChoice = getChoiceForPart(
+                            cotacao,
+                            cotacaoPart.id,
+                          );
+
+                          return (
+                            <div
+                              key={cotacaoPart.id}
+                              className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-semibold text-slate-100">
+                                    {cotacaoPart.peca}
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-400">
+                                    Quantidade: {cotacaoPart.quantidade}
+                                  </p>
+                                </div>
+                                {selectedChoice && (
+                                  <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-200 ring-1 ring-emerald-400/30">
+                                    Escolhido: {selectedChoice.fornecedorNome}
+                                  </span>
+                                )}
+                              </div>
+
+                              {partOptions.length ? (
+                                <div className="mt-4 grid gap-3">
+                                  {partOptions.map(
+                                    ({ response, itemResponse }) => {
+                                      const isBestPrice =
+                                        itemResponse.preco === bestPrice;
+                                      const isSelected =
+                                        selectedChoice?.fornecedorId ===
+                                        response.fornecedorId;
+
+                                      return (
+                                        <div
+                                          key={`${cotacaoPart.id}-${response.fornecedorId}-${itemResponse.dataHora}`}
+                                          className="grid gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 md:grid-cols-[1.2fr_120px_1fr_1.2fr_auto] md:items-center"
+                                        >
+                                          <div>
+                                            <span className="text-xs uppercase text-slate-500">
+                                              Fornecedor
+                                            </span>
+                                            <p className="mt-1 font-medium text-slate-100">
+                                              {response.fornecedorNome}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <span className="text-xs uppercase text-slate-500">
+                                              Preço
+                                            </span>
+                                            <p
+                                              className={
+                                                isBestPrice
+                                                  ? "mt-1 inline-flex rounded-full bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-200 ring-1 ring-emerald-400/30"
+                                                  : "mt-1 text-sm text-slate-300"
+                                              }
+                                            >
+                                              {formatCurrency(itemResponse.preco)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <span className="text-xs uppercase text-slate-500">
+                                              Marca
+                                            </span>
+                                            <p className="mt-1 text-sm text-slate-300">
+                                              {itemResponse.marca || "-"}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <span className="text-xs uppercase text-slate-500">
+                                              Observação
+                                            </span>
+                                            <p className="mt-1 text-sm text-slate-300">
+                                              {itemResponse.observacaoFornecedor ||
+                                                "-"}
+                                            </p>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              handleChooseSupplier(
+                                                cotacao,
+                                                cotacaoPart,
+                                                response,
+                                                itemResponse,
+                                              )
+                                            }
+                                            disabled={
+                                              isSelected ||
+                                              cotacao.status ===
+                                                "Compra confirmada com fornecedor"
+                                            }
+                                            className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                          >
+                                            {isSelected
+                                              ? "Escolhido"
+                                              : "Escolher fornecedor"}
+                                          </button>
+                                        </div>
+                                      );
+                                    },
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="mt-4 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-400">
+                                  Nenhum fornecedor respondeu esta peça ainda.
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </article>
