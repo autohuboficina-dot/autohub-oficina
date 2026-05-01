@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getStoredOrders, type ServiceOrder } from "./osStorage";
+import {
+  getBudgetApprovalBadgeClass,
+  getBudgetApprovalLabel,
+  getServiceOrderStatusBadgeClass,
+  getStoredOrders,
+  type ServiceOrder,
+} from "./osStorage";
 
 export default function OSList() {
   const navigate = useNavigate();
@@ -30,6 +36,7 @@ export default function OSList() {
             <th className="text-left py-3">Cliente</th>
             <th className="text-left py-3">Veículo</th>
             <th className="text-left py-3">Status</th>
+            <th className="text-left py-3">Orçamento</th>
             <th className="text-left py-3">Ação</th>
           </tr>
         </thead>
@@ -44,8 +51,13 @@ export default function OSList() {
                 <span className="ml-2 text-xs text-slate-500">{os.placa}</span>
               </td>
               <td>
-                <span className="bg-slate-800 px-2 py-1 rounded text-xs">
+                <span className={getServiceOrderStatusBadgeClass(os.status)}>
                   {os.status}
+                </span>
+              </td>
+              <td>
+                <span className={getBudgetApprovalBadgeClass(os.statusAprovacao)}>
+                  {getBudgetApprovalLabel(os.statusAprovacao)}
                 </span>
               </td>
               <td>

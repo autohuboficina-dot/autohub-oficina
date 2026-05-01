@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { getClientes, type Cliente } from "../clientes/clientesStorage";
 import {
   createNextOrderCode,
   getStoredOrders,
@@ -16,21 +17,6 @@ const checklistItems = [
   "Bateria",
   "Iluminação",
 ];
-
-const vehicleModelsByBrand: Record<string, string[]> = {
-  Chevrolet: ["Onix", "Onix Plus", "Tracker", "S10", "Spin", "Cruze"],
-  Fiat: ["Argo", "Cronos", "Mobi", "Pulse", "Strada", "Toro", "Uno"],
-  Ford: ["EcoSport", "Fiesta", "Focus", "Ka", "Ranger", "Territory"],
-  Honda: ["Civic", "City", "Fit", "HR-V", "WR-V"],
-  Hyundai: ["Creta", "HB20", "HB20S", "Tucson"],
-  Jeep: ["Compass", "Commander", "Renegade"],
-  Nissan: ["Kicks", "March", "Sentra", "Versa", "Frontier"],
-  Renault: ["Captur", "Duster", "Kwid", "Logan", "Sandero", "Oroch"],
-  Toyota: ["Corolla", "Corolla Cross", "Etios", "Hilux", "SW4", "Yaris"],
-  Volkswagen: ["Gol", "Jetta", "Nivus", "Polo", "Saveiro", "T-Cross", "Virtus"],
-};
-
-const vehicleBrands = Object.keys(vehicleModelsByBrand);
 
 type PartLine = {
   id: number;
@@ -61,92 +47,19 @@ function createInitialChecklistState() {
   }, {});
 }
 
-function onlyDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
-
-function formatPhone(value: string) {
-  const digits = onlyDigits(value).slice(0, 11);
-
-  if (digits.length <= 2) {
-    return digits ? `(${digits}` : "";
-  }
-
-  if (digits.length <= 7) {
-    return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  }
-
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-}
-
-function formatCpf(value: string) {
-  const digits = onlyDigits(value).slice(0, 11);
-
-  if (digits.length <= 3) {
-    return digits;
-  }
-
-  if (digits.length <= 6) {
-    return `${digits.slice(0, 3)}.${digits.slice(3)}`;
-  }
-
-  if (digits.length <= 9) {
-    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
-  }
-
-  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(
-    6,
-    9,
-  )}-${digits.slice(9)}`;
-}
-
-function formatCnpj(value: string) {
-  const digits = onlyDigits(value).slice(0, 14);
-
-  if (digits.length <= 2) {
-    return digits;
-  }
-
-  if (digits.length <= 5) {
-    return `${digits.slice(0, 2)}.${digits.slice(2)}`;
-  }
-
-  if (digits.length <= 8) {
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
-  }
-
-  if (digits.length <= 12) {
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
-      5,
-      8,
-    )}/${digits.slice(8)}`;
-  }
-
-  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(
-    5,
-    8,
-  )}/${digits.slice(8, 12)}-${digits.slice(12)}`;
-}
-
 function toNumber(value: string) {
   return Number(value || 0);
 }
 
 export default function OSNew() {
   const navigate = useNavigate();
-  const [clientName, setClientName] = useState("");
-  const [clientPhone, setClientPhone] = useState("");
-  const [clientCpf, setClientCpf] = useState("");
-  const [clientCnpj, setClientCnpj] = useState("");
-  const [clientEmail, setClientEmail] = useState("");
-  const [vehicleBrand, setVehicleBrand] = useState("");
-  const [vehicleModel, setVehicleModel] = useState("");
-  const [vehicleYear, setVehicleYear] = useState("");
-  const [vehiclePlate, setVehiclePlate] = useState("");
-  const [vehicleMotor, setVehicleMotor] = useState("");
-  const [vehicleFuel, setVehicleFuel] = useState("");
-  const [vehicleVin, setVehicleVin] = useState("");
-  const [vehicleKm, setVehicleKm] = useState("");
+  const [searchParams] = useSearchParams();
+  const [clientes] = useState<Cliente[]>(() => getClientes());
+  const [selectedClienteId, setSelectedClienteId] = useState(() => {
+    const clienteId = searchParams.get("clienteId") || "";
+    return getClientes().some((cliente) => cliente.id === clienteId) ? clienteId : "";
+  });
+  const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [problemReport, setProblemReport] = useState("");
   const [defectFound, setDefectFound] = useState("");
   const [probableCause, setProbableCause] = useState("");
@@ -165,8 +78,22 @@ export default function OSNew() {
     "money",
   );
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [requiresDeposit, setRequiresDeposit] = useState(false);
+  const [depositType, setDepositType] = useState<"valor" | "percentual">(
+    "valor",
+  );
+  const [depositValue, setDepositValue] = useState("");
+  const [depositPercent, setDepositPercent] = useState("");
 
-  const modelSuggestions = vehicleModelsByBrand[vehicleBrand] ?? [];
+  const selectedCliente = useMemo(
+    () => clientes.find((cliente) => cliente.id === selectedClienteId),
+    [clientes, selectedClienteId],
+  );
+  const selectedVehicle = useMemo(
+    () =>
+      selectedCliente?.veiculos.find((veiculo) => veiculo.id === selectedVehicleId),
+    [selectedCliente, selectedVehicleId],
+  );
 
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
@@ -195,6 +122,25 @@ export default function OSNew() {
 
     return { partsTotal, laborTotal, discountAmount, finalTotal };
   }, [discountType, discountValue, laborLines, partLines]);
+  const depositSummary = useMemo(() => {
+    if (!requiresDeposit) {
+      return {
+        entradaCalculada: 0,
+        saldoRestante: totals.finalTotal,
+      };
+    }
+
+    const entradaCalculada =
+      depositType === "percentual"
+        ? (totals.finalTotal * Math.min(Number(depositPercent || 0), 100)) / 100
+        : Number(depositValue || 0);
+    const safeEntrada = Math.min(Math.max(entradaCalculada, 0), totals.finalTotal);
+
+    return {
+      entradaCalculada: safeEntrada,
+      saldoRestante: Math.max(totals.finalTotal - safeEntrada, 0),
+    };
+  }, [depositPercent, depositType, depositValue, requiresDeposit, totals.finalTotal]);
 
   function formatCurrency(value: number) {
     return value.toLocaleString("pt-BR", {
@@ -270,7 +216,11 @@ export default function OSNew() {
   function handleSaveOrder() {
     const currentOrders = getStoredOrders();
     const nextOrderCode = createNextOrderCode(currentOrders);
-    const vehicleDescription = [vehicleBrand, vehicleModel, vehicleYear]
+    const vehicleDescription = [
+      selectedVehicle?.marca,
+      selectedVehicle?.modelo,
+      selectedVehicle?.ano,
+    ]
       .filter(Boolean)
       .join(" ");
     const checklistInicial = checklistItems.map((item) => ({
@@ -300,31 +250,59 @@ export default function OSNew() {
       id: nextOrderCode,
       codigo: nextOrderCode,
       criadoEm: new Date().toISOString(),
-      cliente: clientName.trim() || "Cliente sem nome",
-      telefone: clientPhone.trim(),
+      cliente: selectedCliente?.nome || "Cliente sem nome",
+      telefone: selectedCliente?.telefone || "",
       veiculo: vehicleDescription || "Veículo não informado",
-      placa: vehiclePlate.trim(),
+      placa: selectedVehicle?.placa || "",
       servicoInicial: problemReport.trim(),
       observacao: [defectFound, probableCause, recommendedSolution]
         .filter(Boolean)
         .join(" | "),
       status: "Em diagnóstico",
+      statusAprovacao: "pendente",
+      itensAprovados: [],
+      dataDecisaoAprovacao: "",
+      dataPreAprovacao: "",
+      dataConfirmacaoOficina: "",
+      confirmacaoOficina: false,
+      decisaoCliente: "",
+      observacaoAprovacao: "",
+      exigeEntrada: requiresDeposit,
+      tipoEntrada: depositType,
+      valorEntrada: toNumber(depositValue),
+      percentualEntrada: toNumber(depositPercent),
+      entradaCalculada: depositSummary.entradaCalculada,
+      saldoRestante: depositSummary.saldoRestante,
+      statusEntrada: requiresDeposit ? "pendente" : "nao_exige",
+      dataPagamentoEntrada: "",
+      valorEntradaPago: 0,
+      clienteId: selectedCliente?.id || "",
+      clienteNome: selectedCliente?.nome || "",
+      clienteTelefone: selectedCliente?.telefone || "",
+      veiculoId: selectedVehicle?.id || "",
+      veiculoMarca: selectedVehicle?.marca || "",
+      veiculoModelo: selectedVehicle?.modelo || "",
+      veiculoAno: selectedVehicle?.ano || "",
+      veiculoMotor: selectedVehicle?.motor || "",
+      veiculoCombustivel: selectedVehicle?.combustivel || "",
+      veiculoPlaca: selectedVehicle?.placa || "",
+      veiculoChassi: selectedVehicle?.chassiVin || "",
       clienteDados: {
-        nome: clientName.trim(),
-        telefone: clientPhone.trim(),
-        cpf: clientCpf.trim(),
-        cnpj: clientCnpj.trim(),
-        email: clientEmail.trim(),
+        nome: selectedCliente?.nome || "",
+        telefone: selectedCliente?.telefone || "",
+        cpf: "",
+        cnpj: selectedCliente?.documento || "",
+        email: selectedCliente?.email || "",
       },
       veiculoDados: {
-        marca: vehicleBrand.trim(),
-        modelo: vehicleModel.trim(),
-        ano: vehicleYear.trim(),
-        placa: vehiclePlate.trim(),
-        motor: vehicleMotor.trim(),
-        combustivel: vehicleFuel,
-        chassiVin: vehicleVin.trim(),
-        kmAtual: vehicleKm.trim(),
+        marca: selectedVehicle?.marca || "",
+        modelo: selectedVehicle?.modelo || "",
+        ano: selectedVehicle?.ano || "",
+        placa: selectedVehicle?.placa || "",
+        motor: selectedVehicle?.motor || "",
+        combustivel: selectedVehicle?.combustivel || "",
+        chassiVin: selectedVehicle?.chassiVin || "",
+        kmAtual: "",
       },
       problemaRelatado: problemReport.trim(),
       diagnostico: {
@@ -386,173 +364,89 @@ export default function OSNew() {
 
           <div className="space-y-6">
             <div>
-              <h4 className={subTitleClass}>Dados do cliente</h4>
+              <h4 className={subTitleClass}>Cliente</h4>
 
               <div className="grid gap-5 md:grid-cols-2">
                 <div>
-                  <label className={labelClass}>Nome</label>
-                  <input
+                  <label className={labelClass}>Selecione o cliente</label>
+                  <select
                     className={inputClass}
-                    placeholder="Nome completo"
-                    value={clientName}
-                    onChange={(event) => setClientName(event.target.value)}
-                  />
+                    value={selectedClienteId}
+                    onChange={(event) => {
+                      setSelectedClienteId(event.target.value);
+                      setSelectedVehicleId("");
+                    }}
+                  >
+                    <option value="" disabled>
+                      Selecione
+                    </option>
+                    {clientes.map((cliente) => (
+                      <option key={cliente.id} value={cliente.id}>
+                        {cliente.nome}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
-                <div>
-                  <label className={labelClass}>Telefone</label>
-                  <input
-                    className={inputClass}
-                    inputMode="numeric"
-                    placeholder="(00) 00000-0000"
-                    value={clientPhone}
-                    onChange={(event) =>
-                      setClientPhone(formatPhone(event.target.value))
-                    }
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>CPF opcional</label>
-                  <input
-                    className={inputClass}
-                    inputMode="numeric"
-                    placeholder="000.000.000-00"
-                    value={clientCpf}
-                    onChange={(event) => setClientCpf(formatCpf(event.target.value))}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>CNPJ opcional</label>
-                  <input
-                    className={inputClass}
-                    inputMode="numeric"
-                    placeholder="00.000.000/0000-00"
-                    value={clientCnpj}
-                    onChange={(event) =>
-                      setClientCnpj(formatCnpj(event.target.value))
-                    }
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>E-mail opcional</label>
-                  <input
-                    type="email"
-                    className={inputClass}
-                    placeholder="cliente@email.com"
-                    value={clientEmail}
-                    onChange={(event) => setClientEmail(event.target.value)}
-                  />
+                <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+                  <span className="text-xs uppercase text-slate-500">
+                    Contato
+                  </span>
+                  <p className="mt-1 font-medium">
+                    {selectedCliente?.telefone || "Selecione um cliente"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    {selectedCliente?.documento || selectedCliente?.email || ""}
+                  </p>
                 </div>
               </div>
             </div>
 
             <div>
-              <h4 className={subTitleClass}>Dados do veículo</h4>
+              <h4 className={subTitleClass}>Veículo do cliente</h4>
 
-              <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-5 md:grid-cols-2">
                 <div>
-                  <label className={labelClass}>Marca</label>
-                  <input
-                    className={inputClass}
-                    list="vehicle-brands"
-                    placeholder="Honda"
-                    value={vehicleBrand}
-                    onChange={(event) => setVehicleBrand(event.target.value)}
-                  />
-                  <datalist id="vehicle-brands">
-                    {vehicleBrands.map((brand) => (
-                      <option key={brand} value={brand} />
-                    ))}
-                  </datalist>
-                </div>
-
-                <div>
-                  <label className={labelClass}>Modelo</label>
-                  <input
-                    className={inputClass}
-                    list="vehicle-models"
-                    placeholder="Civic"
-                    value={vehicleModel}
-                    onChange={(event) => setVehicleModel(event.target.value)}
-                  />
-                  <datalist id="vehicle-models">
-                    {modelSuggestions.map((model) => (
-                      <option key={model} value={model} />
-                    ))}
-                  </datalist>
-                </div>
-
-                <div>
-                  <label className={labelClass}>Ano</label>
-                  <input
-                    className={inputClass}
-                    placeholder="2018"
-                    value={vehicleYear}
-                    onChange={(event) => setVehicleYear(event.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Placa</label>
-                  <input
-                    className={inputClass}
-                    placeholder="ABC1D23"
-                    value={vehiclePlate}
-                    onChange={(event) => setVehiclePlate(event.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Motor</label>
-                  <input
-                    className={inputClass}
-                    placeholder="2.0"
-                    value={vehicleMotor}
-                    onChange={(event) => setVehicleMotor(event.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Combustível</label>
+                  <label className={labelClass}>Selecione o veículo</label>
                   <select
                     className={inputClass}
-                    value={vehicleFuel}
-                    onChange={(event) => setVehicleFuel(event.target.value)}
+                    value={selectedVehicleId}
+                    onChange={(event) => setSelectedVehicleId(event.target.value)}
+                    disabled={!selectedCliente}
                   >
                     <option value="" disabled>
-                      Selecione
+                      {selectedCliente
+                        ? "Selecione"
+                        : "Selecione um cliente primeiro"}
                     </option>
-                    <option>Flex</option>
-                    <option>Gasolina</option>
-                    <option>Etanol</option>
-                    <option>Diesel</option>
-                    <option>Elétrico</option>
-                    <option>Híbrido</option>
+                    {selectedCliente?.veiculos.map((veiculo) => (
+                      <option key={veiculo.id} value={veiculo.id}>
+                        {[veiculo.marca, veiculo.modelo, veiculo.ano]
+                          .filter(Boolean)
+                          .join(" ") || "Veículo sem identificação"}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
-                <div>
-                  <label className={labelClass}>Chassi/VIN opcional</label>
-                  <input
-                    className={inputClass}
-                    placeholder="Identificação"
-                    value={vehicleVin}
-                    onChange={(event) => setVehicleVin(event.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Km atual</label>
-                  <input
-                    className={inputClass}
-                    inputMode="numeric"
-                    placeholder="000.000"
-                    value={vehicleKm}
-                    onChange={(event) => setVehicleKm(event.target.value)}
-                  />
+                <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+                  <span className="text-xs uppercase text-slate-500">
+                    Dados do veículo
+                  </span>
+                  <p className="mt-1 font-medium">
+                    {selectedVehicle
+                      ? [selectedVehicle.marca, selectedVehicle.modelo, selectedVehicle.ano]
+                          .filter(Boolean)
+                          .join(" ")
+                      : "Selecione um veículo"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    {selectedVehicle
+                      ? `Placa ${selectedVehicle.placa || "-"} · Motor ${
+                          selectedVehicle.motor || "-"
+                        } · ${selectedVehicle.combustivel || "-"}`
+                      : ""}
+                  </p>
                 </div>
               </div>
             </div>
@@ -903,6 +797,81 @@ export default function OSNew() {
                   <option>Débito</option>
                   <option>Crédito</option>
                 </select>
+              </div>
+
+              <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 p-4">
+                <label className="flex items-center gap-3 text-sm font-semibold text-amber-100">
+                  <input
+                    type="checkbox"
+                    checked={requiresDeposit}
+                    onChange={(event) => setRequiresDeposit(event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-amber-500"
+                  />
+                  Exigir entrada/sinal para iniciar o serviço
+                </label>
+
+                {requiresDeposit && (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className={labelClass}>Tipo da entrada</label>
+                      <select
+                        className={compactInputClass}
+                        value={depositType}
+                        onChange={(event) =>
+                          setDepositType(
+                            event.target.value === "percentual"
+                              ? "percentual"
+                              : "valor",
+                          )
+                        }
+                      >
+                        <option value="valor">Valor fixo</option>
+                        <option value="percentual">Percentual</option>
+                      </select>
+                    </div>
+
+                    {depositType === "valor" ? (
+                      <div>
+                        <label className={labelClass}>Valor da entrada</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className={compactInputClass}
+                          value={depositValue}
+                          onChange={(event) => setDepositValue(event.target.value)}
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className={labelClass}>Percentual</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          className={compactInputClass}
+                          value={depositPercent}
+                          onChange={(event) =>
+                            setDepositPercent(event.target.value)
+                          }
+                        />
+                      </div>
+                    )}
+
+                    <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm">
+                      <span className="text-xs uppercase text-slate-500">
+                        Entrada / saldo
+                      </span>
+                      <p className="mt-1 font-semibold text-slate-100">
+                        {formatCurrency(depositSummary.entradaCalculada)}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Saldo {formatCurrency(depositSummary.saldoRestante)}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

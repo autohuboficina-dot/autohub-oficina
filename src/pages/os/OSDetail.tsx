@@ -1,11 +1,27 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { getClientes, type Cliente } from "../clientes/clientesStorage";
+import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
+  SERVICE_ORDER_STATUSES,
+  getBudgetApprovalBadgeClass,
+  getBudgetApprovalLabel,
+  getServiceOrderStatusForBudgetDecision,
+  getServiceOrderStatusBadgeClass,
   getStoredOrders,
   saveStoredOrders,
+  type BudgetApprovalStatus,
   type ChecklistStatus,
   type ServiceOrder,
+  type ServiceOrderStatus,
 } from "./osStorage";
+import { getCotacoes, saveCotacao, updateCotacao } from "../compras/comprasStorage";
+import {
+  getFornecedores,
+  type Fornecedor,
+} from "../fornecedores/fornecedoresStorage";
+import { registrarSaidaEstoque } from "../estoque/estoqueStorage";
+import { getConfiguracoesOficina } from "../configuracoes/configuracoesStorage";
 
 const checklistItems = [
   "Freio",
@@ -16,26 +32,12 @@ const checklistItems = [
   "Iluminação",
 ];
 
-const vehicleModelsByBrand: Record<string, string[]> = {
-  Chevrolet: ["Onix", "Onix Plus", "Tracker", "S10", "Spin", "Cruze"],
-  Fiat: ["Argo", "Cronos", "Mobi", "Pulse", "Strada", "Toro", "Uno"],
-  Ford: ["EcoSport", "Fiesta", "Focus", "Ka", "Ranger", "Territory"],
-  Honda: ["Civic", "City", "Fit", "HR-V", "WR-V"],
-  Hyundai: ["Creta", "HB20", "HB20S", "Tucson"],
-  Jeep: ["Compass", "Commander", "Renegade"],
-  Nissan: ["Kicks", "March", "Sentra", "Versa", "Frontier"],
-  Renault: ["Captur", "Duster", "Kwid", "Logan", "Sandero", "Oroch"],
-  Toyota: ["Corolla", "Corolla Cross", "Etios", "Hilux", "SW4", "Yaris"],
-  Volkswagen: ["Gol", "Jetta", "Nivus", "Polo", "Saveiro", "T-Cross", "Virtus"],
-};
-
-const vehicleBrands = Object.keys(vehicleModelsByBrand);
-
 type PartLine = {
   id: number;
   name: string;
   quantity: string;
   unitValue: string;
+  compraId?: string;
 };
 
 type LaborLine = {
@@ -52,6 +54,24 @@ type ChecklistFormState = Record<
     observacaoTecnica: string;
   }
 >;
+
+type QuoteFormState = {
+  fornecedorId: string;
+  peca: string;
+  quantidade: string;
+  urgencia: "Normal" | "Urgente";
+  observacao: string;
+  fotos: string[];
+};
+
+const initialQuoteFormState: QuoteFormState = {
+  fornecedorId: "",
+  peca: "",
+  quantidade: "1",
+  urgencia: "Normal",
+  observacao: "",
+  fotos: [],
+};
 
 function onlyDigits(value: string) {
   return value.replace(/\D/g, "");
@@ -131,6 +151,74 @@ function formatCurrency(value: number) {
   });
 }
 
+function formatDate(value: string) {
+  if (!value) {
+    return "Ainda sem decisão";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Data indisponível";
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function createBudgetLink(orderId: string) {
+  if (typeof window === "undefined") {
+    return `/orcamento/${orderId}`;
+  }
+
+  return `${window.location.origin}/orcamento/${orderId}`;
+}
+
+function getWhatsAppPhone(value: string) {
+  const digits = onlyDigits(value);
+
+  if (!digits) {
+    return "";
+  }
+
+  if (digits.startsWith("55")) {
+    return digits;
+  }
+
+  if (digits.length === 10 || digits.length === 11) {
+    return `55${digits}`;
+  }
+
+  return digits;
+}
+
+function createBudgetWhatsappUrl(
+  phone: string,
+  budgetLink: string,
+  oficinaNome: string,
+) {
+  const whatsappPhone = getWhatsAppPhone(phone);
+  const message = `Olá, aqui é da ${oficinaNome}. Seu orçamento está pronto. Clique no link para visualizar e aprovar: ${budgetLink}`;
+
+  if (!whatsappPhone) {
+    return "";
+  }
+
+  return `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(message)}`;
+}
+
+function createQuoteWhatsappUrl(fornecedor: Fornecedor, message: string) {
+  const whatsappPhone = getWhatsAppPhone(fornecedor.whatsapp);
+
+  if (!whatsappPhone) {
+    return "";
+  }
+
+  return `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(message)}`;
+}
+
 function createChecklistState(order?: ServiceOrder) {
   return checklistItems.reduce<ChecklistFormState>((state, item) => {
     const storedItem = order?.checklistInicial.find(
@@ -154,7 +242,24 @@ function createPartLines(order?: ServiceOrder): PartLine[] {
     name: part.peca,
     quantity: String(part.quantidade),
     unitValue: String(part.valorUnitario),
+    compraId: part.compraId,
   }));
+}
+
+function registerStockExitForOrder(order: ServiceOrder) {
+  if (order.status !== "Finalizado") {
+    return;
+  }
+
+  order.pecasNecessarias.forEach((part) => {
+    registrarSaidaEstoque({
+      nome: part.peca,
+      quantidade: part.quantidade,
+      osId: order.id,
+      compraId: part.compraId,
+      descricao: `Peça usada na OS ${order.id}.`,
+    });
+  });
 }
 
 function createLaborLines(order?: ServiceOrder): LaborLine[] {
@@ -174,6 +279,9 @@ export default function OSDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const storedOrders = useMemo(() => getStoredOrders(), []);
+  const [clientes] = useState<Cliente[]>(() => getClientes());
+  const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
+  const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const order = useMemo(
     () =>
       storedOrders.find(
@@ -191,6 +299,8 @@ export default function OSDetail() {
   const [clientCpf, setClientCpf] = useState(order?.clienteDados.cpf || "");
   const [clientCnpj, setClientCnpj] = useState(order?.clienteDados.cnpj || "");
   const [clientEmail, setClientEmail] = useState(order?.clienteDados.email || "");
+  const [selectedClienteId, setSelectedClienteId] = useState(order?.clienteId || "");
+  const [selectedVehicleId, setSelectedVehicleId] = useState(order?.veiculoId || "");
   const [vehicleBrand, setVehicleBrand] = useState(order?.veiculoDados.marca || "");
   const [vehicleModel, setVehicleModel] = useState(order?.veiculoDados.modelo || "");
   const [vehicleYear, setVehicleYear] = useState(order?.veiculoDados.ano || "");
@@ -205,7 +315,24 @@ export default function OSDetail() {
     order?.veiculoDados.chassiVin || "",
   );
   const [vehicleKm, setVehicleKm] = useState(order?.veiculoDados.kmAtual || "");
-  const [status, setStatus] = useState(order?.status || "Em diagnóstico");
+  const [status, setStatus] = useState<ServiceOrderStatus>(
+    order?.status || "Em diagnóstico",
+  );
+  const [approvalStatus, setApprovalStatus] = useState<BudgetApprovalStatus>(
+    order?.statusAprovacao || "pendente",
+  );
+  const [approvalDecisionDate] = useState(
+    order?.dataDecisaoAprovacao || "",
+  );
+  const [approvalConfirmationDate, setApprovalConfirmationDate] = useState(
+    order?.dataConfirmacaoOficina || "",
+  );
+  const [officeConfirmedApproval, setOfficeConfirmedApproval] = useState(
+    Boolean(order?.confirmacaoOficina),
+  );
+  const [clientDecision, setClientDecision] = useState(
+    order?.decisaoCliente || order?.statusAprovacao || "",
+  );
   const [problemReport, setProblemReport] = useState(
     order?.problemaRelatado || order?.servicoInicial || "",
   );
@@ -236,9 +363,78 @@ export default function OSDetail() {
   const [paymentMethod, setPaymentMethod] = useState(
     order?.orcamento.formaPagamento || "",
   );
+  const [requiresDeposit, setRequiresDeposit] = useState(
+    Boolean(order?.exigeEntrada),
+  );
+  const [depositType, setDepositType] = useState<"valor" | "percentual">(
+    order?.tipoEntrada || "valor",
+  );
+  const [depositValue, setDepositValue] = useState(
+    order ? String(order.valorEntrada || "") : "",
+  );
+  const [depositPercent, setDepositPercent] = useState(
+    order ? String(order.percentualEntrada || "") : "",
+  );
+  const [depositStatus, setDepositStatus] = useState<
+    "nao_exige" | "pendente" | "paga"
+  >(order?.statusEntrada || "nao_exige");
+  const [depositPaymentDate, setDepositPaymentDate] = useState(
+    order?.dataPagamentoEntrada || "",
+  );
+  const [depositPaidValue, setDepositPaidValue] = useState(
+    order?.valorEntradaPago || 0,
+  );
   const [saveMessage, setSaveMessage] = useState("");
+  const [showBudgetActions, setShowBudgetActions] = useState(false);
+  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
+  const [quoteForm, setQuoteForm] =
+    useState<QuoteFormState>(initialQuoteFormState);
 
+  const selectedCliente = useMemo(
+    () => clientes.find((cliente) => cliente.id === selectedClienteId),
+    [clientes, selectedClienteId],
+  );
+  const selectedFornecedor = useMemo(
+    () =>
+      fornecedores.find((fornecedor) => fornecedor.id === quoteForm.fornecedorId),
+    [fornecedores, quoteForm.fornecedorId],
+  );
   const modelSuggestions = vehicleModelsByBrand[vehicleBrand] ?? [];
+  const budgetLink = order ? createBudgetLink(order.id) : "";
+  const budgetWhatsappUrl = order
+    ? createBudgetWhatsappUrl(
+        clientPhone || order.clienteTelefone || order.telefone,
+        budgetLink,
+        oficinaConfig.nomeOficina,
+      )
+    : "";
+  const approvalItemLabels = useMemo(() => {
+    if (!order) {
+      return [];
+    }
+
+    const items = [
+      ...order.pecasNecessarias.map((part) => ({
+        id: `peca-${part.id}`,
+        label: part.peca || "Peça sem descrição",
+      })),
+      ...order.servicosMaoDeObra.map((service) => ({
+        id: `servico-${service.id}`,
+        label: service.servico || "Serviço sem descrição",
+      })),
+    ];
+
+    return items
+      .filter((item) => order.itensAprovados.includes(item.id))
+      .map((item) => item.label);
+  }, [order]);
+  const isPreApproved =
+    approvalStatus === "pre_aprovado" ||
+    approvalStatus === "pre_aprovado_parcial";
+  const isFullPreApproval =
+    approvalStatus === "pre_aprovado" ||
+    (approvalStatus === "confirmado_oficina" &&
+      clientDecision === "pre_aprovado");
 
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
@@ -267,6 +463,25 @@ export default function OSDetail() {
 
     return { partsTotal, laborTotal, discountAmount, finalTotal };
   }, [discountType, discountValue, laborLines, partLines]);
+  const depositSummary = useMemo(() => {
+    if (!requiresDeposit) {
+      return {
+        entradaCalculada: 0,
+        saldoRestante: totals.finalTotal,
+      };
+    }
+
+    const entradaCalculada =
+      depositType === "percentual"
+        ? (totals.finalTotal * Math.min(toNumber(depositPercent), 100)) / 100
+        : toNumber(depositValue);
+    const safeEntrada = Math.min(Math.max(entradaCalculada, 0), totals.finalTotal);
+
+    return {
+      entradaCalculada: safeEntrada,
+      saldoRestante: Math.max(totals.finalTotal - safeEntrada, 0),
+    };
+  }, [depositPercent, depositType, depositValue, requiresDeposit, totals.finalTotal]);
 
   function addPartLine() {
     setPartLines((lines) => [
@@ -336,6 +551,270 @@ export default function OSDetail() {
     }));
   }
 
+  function handleSelectCliente(clienteId: string) {
+    const cliente = clientes.find((currentCliente) => currentCliente.id === clienteId);
+    const documentDigits = onlyDigits(cliente?.documento || "");
+
+    setSelectedClienteId(clienteId);
+    setSelectedVehicleId("");
+    setClientName(cliente?.nome || "");
+    setClientPhone(cliente?.telefone || "");
+    setClientEmail(cliente?.email || "");
+    setClientCpf(documentDigits.length <= 11 ? cliente?.documento || "" : "");
+    setClientCnpj(documentDigits.length > 11 ? cliente?.documento || "" : "");
+  }
+
+  function handleSelectVehicle(vehicleId: string) {
+    const veiculo = selectedCliente?.veiculos.find(
+      (currentVehicle) => currentVehicle.id === vehicleId,
+    );
+
+    setSelectedVehicleId(vehicleId);
+    setVehicleBrand(veiculo?.marca || "");
+    setVehicleModel(veiculo?.modelo || "");
+    setVehicleYear(veiculo?.ano || "");
+    setVehiclePlate(veiculo?.placa || "");
+    setVehicleMotor(veiculo?.motor || "");
+    setVehicleFuel(veiculo?.combustivel || "");
+    setVehicleVin(veiculo?.chassiVin || "");
+  }
+
+  function handleStatusChange(nextStatus: ServiceOrderStatus) {
+    setStatus(nextStatus);
+
+    if (!order) {
+      return;
+    }
+
+    const updatedOrders = getStoredOrders().map((storedOrder) =>
+      storedOrder.id === order.id
+        ? { ...storedOrder, status: nextStatus }
+        : storedOrder,
+    );
+    saveStoredOrders(updatedOrders);
+    const updatedOrder = updatedOrders.find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+
+    if (updatedOrder) {
+      registerStockExitForOrder(updatedOrder);
+    }
+
+    setSaveMessage("Status atualizado.");
+  }
+
+  function handleConfirmClientApproval() {
+    if (!order || !isPreApproved) {
+      return;
+    }
+
+    const dataConfirmacaoOficina = new Date().toISOString();
+    const updatedOrders = getStoredOrders().map((storedOrder) => {
+      if (storedOrder.id !== order.id) {
+        return storedOrder;
+      }
+
+      const updatedOrder = {
+        ...storedOrder,
+        statusAprovacao: "confirmado_oficina" as const,
+        confirmacaoOficina: true,
+        dataConfirmacaoOficina,
+        decisaoCliente: storedOrder.decisaoCliente || approvalStatus,
+        exigeEntrada: requiresDeposit,
+        tipoEntrada: depositType,
+        valorEntrada: toNumber(depositValue),
+        percentualEntrada: toNumber(depositPercent),
+        entradaCalculada: depositSummary.entradaCalculada,
+        saldoRestante: depositSummary.saldoRestante,
+        statusEntrada: requiresDeposit ? depositStatus === "paga" ? "paga" as const : "pendente" as const : "nao_exige" as const,
+      };
+
+      return {
+        ...updatedOrder,
+        status: getServiceOrderStatusForBudgetDecision(
+          updatedOrder,
+          "confirmado_oficina",
+        ),
+      };
+    });
+    const updatedOrder = updatedOrders.find(
+      (storedOrder) => storedOrder.id === order.id,
+    );
+
+    if (updatedOrder) {
+      const cotacoes = getCotacoes();
+      updatedOrder.pecasNecessarias
+        .filter((part) => part.compraId)
+        .forEach((part) => {
+          const wasApproved = updatedOrder.itensAprovados.includes(
+            `peca-${part.id}`,
+          );
+          const cotacao = cotacoes.find(
+            (currentCotacao) => currentCotacao.id === part.compraId,
+          );
+
+          if (!cotacao || !wasApproved) {
+            return;
+          }
+
+          updateCotacao({
+            ...cotacao,
+            status: "Aprovada pelo cliente",
+          });
+        });
+
+      setStatus(updatedOrder.status);
+    }
+
+    saveStoredOrders(updatedOrders);
+    setApprovalStatus("confirmado_oficina");
+    setApprovalConfirmationDate(dataConfirmacaoOficina);
+    setOfficeConfirmedApproval(true);
+    setClientDecision((currentDecision) => currentDecision || approvalStatus);
+    setSaveMessage("Aprovação confirmada pela oficina.");
+  }
+
+  function handleConfirmDepositPayment() {
+    if (!order || !requiresDeposit) {
+      return;
+    }
+
+    const dataPagamentoEntrada = new Date().toISOString();
+    const updatedOrders = getStoredOrders().map((storedOrder) =>
+      storedOrder.id === order.id
+        ? {
+            ...storedOrder,
+            exigeEntrada: true,
+            tipoEntrada: depositType,
+            valorEntrada: toNumber(depositValue),
+            percentualEntrada: toNumber(depositPercent),
+            entradaCalculada: depositSummary.entradaCalculada,
+            saldoRestante: depositSummary.saldoRestante,
+            statusEntrada: "paga" as const,
+            dataPagamentoEntrada,
+            valorEntradaPago: depositSummary.entradaCalculada,
+            status: "Liberado para execução" as const,
+          }
+        : storedOrder,
+    );
+
+    saveStoredOrders(updatedOrders);
+    setDepositStatus("paga");
+    setDepositPaymentDate(dataPagamentoEntrada);
+    setDepositPaidValue(depositSummary.entradaCalculada);
+    setStatus("Liberado para execução");
+    setSaveMessage("Recebimento da entrada confirmado.");
+  }
+
+  async function handleCopyBudgetLink() {
+    if (!order) {
+      return;
+    }
+
+    try {
+      if (!navigator.clipboard) {
+        throw new Error("Clipboard unavailable");
+      }
+
+      await navigator.clipboard.writeText(budgetLink);
+      setSaveMessage(`Link copiado: ${budgetLink}`);
+    } catch {
+      setSaveMessage(`Link do orçamento: ${budgetLink}`);
+    }
+  }
+
+  function handleOpenBudgetWhatsapp() {
+    if (!budgetWhatsappUrl) {
+      setSaveMessage("Informe o telefone do cliente para abrir o WhatsApp.");
+      return;
+    }
+
+    window.open(budgetWhatsappUrl, "_blank", "noopener,noreferrer");
+    setSaveMessage("WhatsApp aberto com a mensagem do orçamento.");
+  }
+
+  function resetQuoteForm() {
+    setQuoteForm(initialQuoteFormState);
+  }
+
+  function handleOpenQuoteModal() {
+    if (!order) {
+      return;
+    }
+
+    navigate(`/compras?osId=${order.id}`);
+  }
+
+  function handleSendQuote() {
+    if (!order) {
+      return;
+    }
+
+    if (!selectedFornecedor) {
+      setSaveMessage("Selecione um fornecedor para enviar a cotação.");
+      return;
+    }
+
+    if (!quoteForm.peca.trim()) {
+      setSaveMessage("Informe a peça para solicitar cotação.");
+      return;
+    }
+
+    const quantidade = Math.max(Number(quoteForm.quantidade || 1), 1);
+    const vehicleInfo = {
+      marca: vehicleBrand.trim(),
+      modelo: vehicleModel.trim(),
+      ano: vehicleYear.trim(),
+      motor: vehicleMotor.trim(),
+      placa: vehiclePlate.trim(),
+    };
+    const message = [
+      `${oficinaConfig.nomeOficina} - solicitação de cotação`,
+      "",
+      `Veículo: ${[vehicleInfo.marca, vehicleInfo.modelo, vehicleInfo.ano]
+        .filter(Boolean)
+        .join(" ") || "não informado"}`,
+      `Motor: ${vehicleInfo.motor || "não informado"}`,
+      `Placa: ${vehicleInfo.placa || "não informada"}`,
+      "",
+      `Peça solicitada: ${quoteForm.peca.trim()}`,
+      `Quantidade: ${quantidade}`,
+      `Urgência: ${quoteForm.urgencia}`,
+      quoteForm.observacao.trim()
+        ? `Observação: ${quoteForm.observacao.trim()}`
+        : "",
+      quoteForm.fotos.length
+        ? `Fotos anexadas na OS: ${quoteForm.fotos.join(", ")}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const whatsappUrl = createQuoteWhatsappUrl(selectedFornecedor, message);
+
+    if (!whatsappUrl) {
+      setSaveMessage("O fornecedor selecionado não possui WhatsApp válido.");
+      return;
+    }
+
+    saveCotacao({
+      osId: order.id,
+      fornecedorId: selectedFornecedor.id,
+      fornecedorNome: selectedFornecedor.nome,
+      fornecedorWhatsapp: selectedFornecedor.whatsapp,
+      peca: quoteForm.peca.trim(),
+      quantidade,
+      urgencia: quoteForm.urgencia,
+      observacao: quoteForm.observacao.trim(),
+      fotos: quoteForm.fotos,
+      veiculo: vehicleInfo,
+    });
+
+    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+    setSaveMessage(`Cotação enviada para ${selectedFornecedor.nome}.`);
+    setIsQuoteModalOpen(false);
+    resetQuoteForm();
+  }
+
   function handleSaveChanges() {
     if (!order) {
       return;
@@ -359,6 +838,7 @@ export default function OSDetail() {
         quantidade,
         valorUnitario,
         valorTotal: quantidade * valorUnitario,
+        compraId: line.compraId,
       };
     });
     const servicosMaoDeObra = laborLines.map((line) => ({
@@ -380,6 +860,31 @@ export default function OSDetail() {
         .filter(Boolean)
         .join(" | "),
       status,
+      statusAprovacao: approvalStatus,
+      dataDecisaoAprovacao: approvalDecisionDate,
+      dataConfirmacaoOficina: approvalConfirmationDate,
+      confirmacaoOficina: officeConfirmedApproval,
+      decisaoCliente: clientDecision,
+      exigeEntrada: requiresDeposit,
+      tipoEntrada: depositType,
+      valorEntrada: toNumber(depositValue),
+      percentualEntrada: toNumber(depositPercent),
+      entradaCalculada: depositSummary.entradaCalculada,
+      saldoRestante: depositSummary.saldoRestante,
+      statusEntrada: requiresDeposit ? depositStatus : "nao_exige",
+      dataPagamentoEntrada: depositPaymentDate,
+      valorEntradaPago: depositPaidValue,
+      clienteId: selectedClienteId,
+      clienteNome: clientName.trim(),
+      clienteTelefone: clientPhone.trim(),
+      veiculoId: selectedVehicleId,
+      veiculoMarca: vehicleBrand.trim(),
+      veiculoModelo: vehicleModel.trim(),
+      veiculoAno: vehicleYear.trim(),
+      veiculoMotor: vehicleMotor.trim(),
+      veiculoCombustivel: vehicleFuel,
+      veiculoPlaca: vehiclePlate.trim(),
+      veiculoChassi: vehicleVin.trim(),
       clienteDados: {
         nome: clientName.trim(),
         telefone: clientPhone.trim(),
@@ -421,6 +926,7 @@ export default function OSDetail() {
       storedOrder.id === order.id ? updatedOrder : storedOrder,
     );
     saveStoredOrders(updatedOrders);
+    registerStockExitForOrder(updatedOrder);
     setSaveMessage("Alterações salvas.");
   }
 
@@ -454,14 +960,383 @@ export default function OSDetail() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => navigate("/os")}
-          className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-        >
-          Voltar
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
+            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400"
+          >
+            Enviar orçamento
+          </button>
+
+          <button
+            type="button"
+            onClick={handleOpenQuoteModal}
+            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-amber-400"
+          >
+            Solicitar cotação
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigate("/os")}
+            className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+          >
+            Voltar
+          </button>
+        </div>
       </div>
+
+      <section className={`${sectionClass} mb-6`}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <span className="text-sm font-semibold uppercase text-sky-400">
+              Orçamento
+            </span>
+            <h3 className="mt-1 text-2xl font-bold">Aprovação do cliente</h3>
+            <p className="mt-2 text-slate-400">
+              Link público: {budgetLink}
+            </p>
+          </div>
+
+          <span className={getBudgetApprovalBadgeClass(approvalStatus)}>
+            {getBudgetApprovalLabel(approvalStatus)}
+          </span>
+        </div>
+
+        {showBudgetActions && (
+          <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+              <input
+                className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-300 outline-none"
+                value={budgetLink}
+                readOnly
+              />
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleCopyBudgetLink}
+                  className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                >
+                  Copiar link
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleOpenBudgetWhatsapp}
+                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400"
+                >
+                  Abrir WhatsApp
+                </button>
+              </div>
+            </div>
+
+            <p className="mt-3 text-xs text-slate-500">
+              Mensagem: Olá, aqui é da {oficinaConfig.nomeOficina}. Seu
+              orçamento está pronto. Clique no link para visualizar e aprovar:{" "}
+              {budgetLink}
+            </p>
+          </div>
+        )}
+
+        <div className="mt-5 grid gap-4 md:grid-cols-3">
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <span className="text-xs uppercase text-slate-500">
+              Decisão do cliente
+            </span>
+            <p className="mt-1 font-semibold">
+              {getBudgetApprovalLabel(approvalStatus)}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <span className="text-xs uppercase text-slate-500">
+              Data da decisão
+            </span>
+            <p className="mt-1 font-semibold">
+              {formatDate(approvalDecisionDate)}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <span className="text-xs uppercase text-slate-500">
+              Itens aprovados
+            </span>
+            <p className="mt-1 font-semibold">
+              {isFullPreApproval
+                ? "Todos"
+                : approvalItemLabels.length
+                  ? `${approvalItemLabels.length} item(ns)`
+                  : "Nenhum"}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+            <span className="text-xs uppercase text-slate-500">
+              Confirmação da oficina
+            </span>
+            <p className="mt-1 font-semibold">
+              {officeConfirmedApproval
+                ? `Confirmada em ${formatDate(approvalConfirmationDate)}`
+                : "Ainda não confirmada"}
+            </p>
+          </div>
+
+          {isPreApproved && (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-4">
+              <p className="text-sm font-medium text-amber-100">
+                Antes de confirmar, entre em contato com o cliente por telefone
+                ou WhatsApp e confirme que ele autorizou este orçamento.
+              </p>
+              <button
+                type="button"
+                onClick={handleConfirmClientApproval}
+                className="mt-4 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
+              >
+                Confirmar aprovação com cliente
+              </button>
+            </div>
+          )}
+        </div>
+
+        {requiresDeposit && (
+          <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-500/10 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <span className="text-xs uppercase text-amber-200">
+                  Entrada/sinal
+                </span>
+                <p className="mt-1 font-semibold text-amber-50">
+                  Status:{" "}
+                  {depositStatus === "paga"
+                    ? "Paga"
+                    : "Pendente de pagamento"}
+                </p>
+                <p className="mt-1 text-sm text-amber-100/80">
+                  Entrada {formatCurrency(depositSummary.entradaCalculada)} ·
+                  Saldo restante {formatCurrency(depositSummary.saldoRestante)}
+                </p>
+                {depositStatus === "paga" && (
+                  <p className="mt-1 text-xs text-amber-100/70">
+                    Pago em {formatDate(depositPaymentDate)} · Valor recebido{" "}
+                    {formatCurrency(depositPaidValue)}
+                  </p>
+                )}
+              </div>
+
+              {approvalStatus === "confirmado_oficina" &&
+                depositStatus !== "paga" && (
+                  <button
+                    type="button"
+                    onClick={handleConfirmDepositPayment}
+                    className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
+                  >
+                    Confirmar recebimento da entrada
+                  </button>
+                )}
+            </div>
+          </div>
+        )}
+
+        {(approvalItemLabels.length > 0 || order.observacaoAprovacao) && (
+          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300">
+            {approvalItemLabels.length > 0 && (
+              <p>Itens aprovados: {approvalItemLabels.join(", ")}.</p>
+            )}
+            {order.observacaoAprovacao && (
+              <p className="mt-2">
+                Observação do cliente: {order.observacaoAprovacao}
+              </p>
+            )}
+          </div>
+        )}
+      </section>
+
+      {isQuoteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-xl shadow-slate-950/40 sm:p-6">
+            <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <span className="text-sm font-semibold uppercase text-amber-300">
+                  Compras
+                </span>
+                <h3 className="mt-1 text-2xl font-bold">
+                  Solicitar cotação de peça
+                </h3>
+                <p className="mt-2 text-sm text-slate-400">
+                  Envie a solicitação para um fornecedor cadastrado via WhatsApp.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsQuoteModalOpen(false)}
+                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <div className="mb-5 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
+              <span className="text-xs uppercase text-slate-500">Veículo</span>
+              <p className="mt-1 font-semibold text-slate-100">
+                {[vehicleBrand, vehicleModel, vehicleYear].filter(Boolean).join(" ") ||
+                  "Veículo não informado"}
+              </p>
+              <p className="mt-1 text-slate-400">
+                Motor {vehicleMotor || "-"} · Placa {vehiclePlate || "-"}
+              </p>
+            </div>
+
+            <div className="grid gap-5">
+              <div>
+                <label className={labelClass}>Fornecedor</label>
+                <select
+                  className={inputClass}
+                  value={quoteForm.fornecedorId}
+                  onChange={(event) =>
+                    setQuoteForm((currentState) => ({
+                      ...currentState,
+                      fornecedorId: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Selecione um fornecedor</option>
+                  {fornecedores.map((fornecedor) => (
+                    <option key={fornecedor.id} value={fornecedor.id}>
+                      {fornecedor.nome} - {fornecedor.categoria}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedFornecedor && (
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
+                  <p className="font-medium text-slate-100">
+                    {selectedFornecedor.nome}
+                  </p>
+                  <p className="mt-1 text-slate-400">
+                    WhatsApp: {selectedFornecedor.whatsapp || "não informado"}
+                  </p>
+                  {selectedFornecedor.observacoes && (
+                    <p className="mt-1 text-slate-500">
+                      {selectedFornecedor.observacoes}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="grid gap-5 md:grid-cols-[1fr_140px_180px]">
+                <div>
+                  <label className={labelClass}>Peça</label>
+                  <input
+                    className={inputClass}
+                    placeholder="Pastilha, filtro, sensor..."
+                    value={quoteForm.peca}
+                    onChange={(event) =>
+                      setQuoteForm((currentState) => ({
+                        ...currentState,
+                        peca: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass}>Quantidade</label>
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min="1"
+                    value={quoteForm.quantidade}
+                    onChange={(event) =>
+                      setQuoteForm((currentState) => ({
+                        ...currentState,
+                        quantidade: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass}>Urgência</label>
+                  <select
+                    className={inputClass}
+                    value={quoteForm.urgencia}
+                    onChange={(event) =>
+                      setQuoteForm((currentState) => ({
+                        ...currentState,
+                        urgencia:
+                          event.target.value === "Urgente" ? "Urgente" : "Normal",
+                      }))
+                    }
+                  >
+                    <option>Normal</option>
+                    <option>Urgente</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className={labelClass}>Observação</label>
+                <textarea
+                  rows={4}
+                  className={inputClass}
+                  placeholder="Marca preferida, lado do veículo, prazo desejado..."
+                  value={quoteForm.observacao}
+                  onChange={(event) =>
+                    setQuoteForm((currentState) => ({
+                      ...currentState,
+                      observacao: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className={labelClass}>Fotos</label>
+                <input
+                  type="file"
+                  multiple
+                  className="w-full rounded-lg border border-dashed border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-300 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-100"
+                  onChange={(event) =>
+                    setQuoteForm((currentState) => ({
+                      ...currentState,
+                      fotos: Array.from(event.target.files || []).map(
+                        (file) => file.name,
+                      ),
+                    }))
+                  }
+                />
+                <p className="mt-2 text-xs text-slate-500">
+                  As fotos são usadas apenas como referência de nome nesta versão.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-3 border-t border-slate-800 pt-5">
+                <button
+                  type="button"
+                  onClick={() => setIsQuoteModalOpen(false)}
+                  className="rounded-xl border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSendQuote}
+                  className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+                >
+                  Enviar para fornecedor
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <form
         className="space-y-6"
@@ -483,6 +1358,22 @@ export default function OSDetail() {
               <h4 className={subTitleClass}>Dados do cliente</h4>
 
               <div className="grid gap-5 md:grid-cols-2">
+                <div>
+                  <label className={labelClass}>Cliente vinculado</label>
+                  <select
+                    className={inputClass}
+                    value={selectedClienteId}
+                    onChange={(event) => handleSelectCliente(event.target.value)}
+                  >
+                    <option value="">Sem vínculo</option>
+                    {clientes.map((cliente) => (
+                      <option key={cliente.id} value={cliente.id}>
+                        {cliente.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div>
                   <label className={labelClass}>Nome</label>
                   <input
@@ -542,18 +1433,24 @@ export default function OSDetail() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Status da OS</label>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <label className="block text-sm font-medium text-slate-300">
+                      Status da OS
+                    </label>
+                    <span className={getServiceOrderStatusBadgeClass(status)}>
+                      {status}
+                    </span>
+                  </div>
                   <select
                     className={inputClass}
                     value={status}
-                    onChange={(event) => setStatus(event.target.value)}
+                    onChange={(event) =>
+                      handleStatusChange(event.target.value as ServiceOrderStatus)
+                    }
                   >
-                    <option>Em diagnóstico</option>
-                    <option>Aguardando aprovação</option>
-                    <option>Aprovada</option>
-                    <option>Em execução</option>
-                    <option>Finalizada</option>
-                    <option>Cancelada</option>
+                    {SERVICE_ORDER_STATUSES.map((serviceOrderStatus) => (
+                      <option key={serviceOrderStatus}>{serviceOrderStatus}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -563,6 +1460,29 @@ export default function OSDetail() {
               <h4 className={subTitleClass}>Dados do veículo</h4>
 
               <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+                <div className="lg:col-span-2">
+                  <label className={labelClass}>Veículo vinculado</label>
+                  <select
+                    className={inputClass}
+                    value={selectedVehicleId}
+                    onChange={(event) => handleSelectVehicle(event.target.value)}
+                    disabled={!selectedCliente}
+                  >
+                    <option value="">
+                      {selectedCliente
+                        ? "Sem vínculo"
+                        : "Selecione um cliente primeiro"}
+                    </option>
+                    {selectedCliente?.veiculos.map((veiculo) => (
+                      <option key={veiculo.id} value={veiculo.id}>
+                        {[veiculo.marca, veiculo.modelo, veiculo.ano]
+                          .filter(Boolean)
+                          .join(" ") || "Veículo sem identificação"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div>
                   <label className={labelClass}>Marca</label>
                   <input
@@ -1012,6 +1932,84 @@ export default function OSDetail() {
                   <option>Débito</option>
                   <option>Crédito</option>
                 </select>
+              </div>
+
+              <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 p-4">
+                <label className="flex items-center gap-3 text-sm font-semibold text-amber-100">
+                  <input
+                    type="checkbox"
+                    checked={requiresDeposit}
+                    onChange={(event) => {
+                      setRequiresDeposit(event.target.checked);
+                      setDepositStatus(event.target.checked ? "pendente" : "nao_exige");
+                    }}
+                    className="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-amber-500"
+                  />
+                  Exigir entrada/sinal para iniciar o serviço
+                </label>
+
+                {requiresDeposit && (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <label className={labelClass}>Tipo da entrada</label>
+                      <select
+                        className={compactInputClass}
+                        value={depositType}
+                        onChange={(event) =>
+                          setDepositType(
+                            event.target.value === "percentual"
+                              ? "percentual"
+                              : "valor",
+                          )
+                        }
+                      >
+                        <option value="valor">Valor fixo</option>
+                        <option value="percentual">Percentual</option>
+                      </select>
+                    </div>
+
+                    {depositType === "valor" ? (
+                      <div>
+                        <label className={labelClass}>Valor da entrada</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className={compactInputClass}
+                          value={depositValue}
+                          onChange={(event) => setDepositValue(event.target.value)}
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className={labelClass}>Percentual</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          className={compactInputClass}
+                          value={depositPercent}
+                          onChange={(event) =>
+                            setDepositPercent(event.target.value)
+                          }
+                        />
+                      </div>
+                    )}
+
+                    <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm">
+                      <span className="text-xs uppercase text-slate-500">
+                        Entrada / saldo
+                      </span>
+                      <p className="mt-1 font-semibold text-slate-100">
+                        {formatCurrency(depositSummary.entradaCalculada)}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Saldo {formatCurrency(depositSummary.saldoRestante)}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

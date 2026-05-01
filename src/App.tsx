@@ -1,58 +1,213 @@
-import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import { useState } from "react";
+import {
+  BrowserRouter,
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
+import {
+  normalizeRole,
+  ROLE_LABELS,
+  USER_ROLES,
+  type UserRole,
+} from "./accessControl";
+import Clientes from "./pages/clientes/Clientes";
+import ClienteDetail from "./pages/clientes/ClienteDetail";
+import Compras from "./pages/compras/Compras";
+import Configuracoes from "./pages/configuracoes/Configuracoes";
+import { getConfiguracoesOficina } from "./pages/configuracoes/configuracoesStorage";
+import Dashboard from "./pages/dashboard/Dashboard";
+import Estoque from "./pages/estoque/Estoque";
+import Financeiro from "./pages/financeiro/Financeiro";
+import FornecedorCotacaoView from "./pages/fornecedor/FornecedorCotacaoView";
+import Fornecedores from "./pages/fornecedores/Fornecedores";
 import OSList from "./pages/os/OSList";
 import OSDetail from "./pages/os/OSDetail";
 import OSNew from "./pages/os/OSNew";
+import OrcamentoView from "./pages/orcamento/OrcamentoView";
+import SDR from "./pages/sdr/SDR";
+
+const ROLE_STORAGE_KEY = "autohub:perfil";
+
+type MenuItem = {
+  label: string;
+  path: string;
+};
+
+const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
+  admin: [
+    { label: "Dashboard", path: "/dashboard" },
+    { label: "Financeiro", path: "/financeiro" },
+    { label: "Clientes", path: "/clientes" },
+    { label: "Ordens de Serviço", path: "/os" },
+    { label: "Compras", path: "/compras" },
+    { label: "Fornecedores", path: "/fornecedores" },
+    { label: "Estoque", path: "/estoque" },
+    { label: "SDR", path: "/sdr" },
+    { label: "Configurações", path: "/configuracoes" },
+  ],
+  mecanico: [
+    { label: "Dashboard", path: "/dashboard" },
+    { label: "Minhas OS", path: "/minhas-os" },
+    { label: "Ordens de Serviço", path: "/os" },
+    { label: "Estoque apenas consulta", path: "/estoque" },
+  ],
+  atendimento: [
+    { label: "Dashboard", path: "/dashboard" },
+    { label: "Clientes", path: "/clientes" },
+    { label: "Veículos", path: "/veiculos" },
+    { label: "Ordens de Serviço", path: "/os" },
+    { label: "Orçamentos", path: "/orcamentos" },
+    { label: "SDR", path: "/sdr" },
+  ],
+  compras: [
+    { label: "Dashboard", path: "/dashboard" },
+    { label: "Compras", path: "/compras" },
+    { label: "Fornecedores", path: "/fornecedores" },
+    { label: "Estoque", path: "/estoque" },
+  ],
+  financeiro: [
+    { label: "Dashboard", path: "/dashboard" },
+    { label: "Financeiro", path: "/financeiro" },
+  ],
+};
+
+function getInitialRole() {
+  if (typeof window === "undefined") {
+    return "admin";
+  }
+
+  return normalizeRole(localStorage.getItem(ROLE_STORAGE_KEY));
+}
+
+function isActivePath(currentPath: string, itemPath: string) {
+  if (itemPath === "/dashboard") {
+    return currentPath === "/" || currentPath === "/dashboard";
+  }
+
+  return currentPath === itemPath || currentPath.startsWith(`${itemPath}/`);
+}
+
+function AppContent() {
+  const location = useLocation();
+  const [currentRole, setCurrentRole] = useState<UserRole>(getInitialRole);
+  const [oficinaConfig] = useState(() => getConfiguracoesOficina());
+  const isPublicBudgetRoute =
+    location.pathname.startsWith("/orcamento/") ||
+    location.pathname.startsWith("/fornecedor/cotacao/");
+
+  function handleRoleChange(role: UserRole) {
+    setCurrentRole(role);
+    localStorage.setItem(ROLE_STORAGE_KEY, role);
+  }
+
+  if (isPublicBudgetRoute) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100">
+        <main className="px-4 py-6 sm:px-6 lg:px-8">
+          <Routes>
+            <Route path="/orcamento/:id" element={<OrcamentoView />} />
+            <Route
+              path="/fornecedor/cotacao/:id"
+              element={<FornecedorCotacaoView />}
+            />
+            <Route path="*" element={<Navigate to="/os" />} />
+          </Routes>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <aside className="fixed left-0 top-0 h-screen w-64 border-r border-slate-800 bg-slate-900 p-6">
+        <h1 className="text-xl font-bold text-sky-400">
+          {oficinaConfig.nomeOficina}
+        </h1>
+        <p className="mt-1 text-sm text-slate-400">Gestão inteligente</p>
+
+        <nav className="mt-8 space-y-2">
+          {MENU_BY_ROLE[currentRole].map((item) => {
+            const isActive = isActivePath(location.pathname, item.path);
+
+            return (
+              <Link
+                key={`${currentRole}-${item.path}-${item.label}`}
+                to={item.path}
+                className={`block rounded-lg px-4 py-2 text-sm transition ${
+                  isActive
+                    ? "bg-sky-500 font-medium text-white"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <main className="ml-64 min-h-screen p-8">
+        <header className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900 px-5 py-4">
+          <div>
+            <span className="text-xs font-semibold uppercase text-slate-500">
+              Perfil atual
+            </span>
+            <p className="mt-1 text-lg font-semibold text-slate-100">
+              {ROLE_LABELS[currentRole]}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {USER_ROLES.map((role) => (
+              <button
+                key={role}
+                type="button"
+                onClick={() => handleRoleChange(role)}
+                className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+                  currentRole === role
+                    ? "bg-sky-500 text-white"
+                    : "border border-slate-700 text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                {ROLE_LABELS[role]}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" />} />
+          <Route path="/dashboard" element={<Dashboard role={currentRole} />} />
+          <Route path="/financeiro" element={<Financeiro role={currentRole} />} />
+          <Route path="/clientes" element={<Clientes />} />
+          <Route path="/clientes/:id" element={<ClienteDetail />} />
+          <Route path="/veiculos" element={<Clientes />} />
+          <Route path="/os" element={<OSList />} />
+          <Route path="/minhas-os" element={<OSList />} />
+          <Route path="/orcamentos" element={<OSList />} />
+          <Route path="/os/nova" element={<OSNew />} />
+          <Route path="/os/:id" element={<OSDetail />} />
+          <Route path="/sdr" element={<SDR />} />
+          <Route path="/compras" element={<Compras />} />
+          <Route path="/estoque" element={<Estoque />} />
+          <Route path="/fornecedores" element={<Fornecedores />} />
+          <Route
+            path="/configuracoes"
+            element={<Configuracoes role={currentRole} />}
+          />
+        </Routes>
+      </main>
+    </div>
+  );
+}
 
 export default function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-slate-950 text-slate-100">
-        {/* Sidebar */}
-        <aside className="fixed left-0 top-0 h-screen w-64 border-r border-slate-800 bg-slate-900 p-6">
-          <h1 className="text-xl font-bold text-sky-400">AutoHub Oficina</h1>
-          <p className="mt-1 text-sm text-slate-400">Gestão inteligente</p>
-
-          <nav className="mt-8 space-y-2">
-            <a className="block rounded-lg px-4 py-2 text-slate-300 hover:bg-slate-800">
-              Dashboard
-            </a>
-            <a className="block rounded-lg px-4 py-2 text-slate-300 hover:bg-slate-800">
-              Clientes
-            </a>
-            <a className="block rounded-lg px-4 py-2 text-slate-300 hover:bg-slate-800">
-              Veículos
-            </a>
-            <Link
-              to="/os"
-              className="block rounded-lg bg-sky-500 px-4 py-2 font-medium text-white"
-            >
-              Ordens de Serviço
-            </Link>
-            <a className="block rounded-lg px-4 py-2 text-slate-300 hover:bg-slate-800">
-              Compras
-            </a>
-            <a className="block rounded-lg px-4 py-2 text-slate-300 hover:bg-slate-800">
-              Estoque
-            </a>
-            <a className="block rounded-lg px-4 py-2 text-slate-300 hover:bg-slate-800">
-              Orçamentos
-            </a>
-            <a className="block rounded-lg px-4 py-2 text-slate-300 hover:bg-slate-800">
-              Fornecedores
-            </a>
-          </nav>
-        </aside>
-
-        {/* Conteúdo */}
-        <main className="ml-64 p-8">
-          <Routes>
-            <Route path="/" element={<Navigate to="/os" />} />
-            <Route path="/os" element={<OSList />} />
-            <Route path="/os/nova" element={<OSNew />} />
-            <Route path="/os/:id" element={<OSDetail />} />
-          </Routes>
-        </main>
-      </div>
+      <AppContent />
     </BrowserRouter>
   );
 }
