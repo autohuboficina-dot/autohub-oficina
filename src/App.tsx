@@ -12,6 +12,8 @@ import {
   USER_ROLES,
   type UserRole,
 } from "./accessControl";
+import ProtectedRoute from "./components/auth/ProtectedRoute";
+import { AuthProvider } from "./contexts/AuthContext";
 import Clientes from "./pages/clientes/Clientes";
 import ClienteDetail from "./pages/clientes/ClienteDetail";
 import Compras from "./pages/compras/Compras";
@@ -21,6 +23,7 @@ import Estoque from "./pages/estoque/Estoque";
 import Financeiro from "./pages/financeiro/Financeiro";
 import FornecedorCotacaoView from "./pages/fornecedor/FornecedorCotacaoView";
 import Fornecedores from "./pages/fornecedores/Fornecedores";
+import Login from "./pages/auth/Login";
 import OSList from "./pages/os/OSList";
 import OSDetail from "./pages/os/OSDetail";
 import OSNew from "./pages/os/OSNew";
@@ -91,6 +94,7 @@ function AppContent() {
   const location = useLocation();
   const [currentRole, setCurrentRole] = useState<UserRole>(getInitialRole);
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
+
   const isPublicBudgetRoute =
     location.pathname.startsWith("/orcamento/") ||
     location.pathname.startsWith("/fornecedor/cotacao/");
@@ -204,7 +208,19 @@ function AppContent() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AppContent />
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/*"
+            element={
+              <ProtectedRoute>
+                <AppContent />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </AuthProvider>
     </BrowserRouter>
   );
 }
