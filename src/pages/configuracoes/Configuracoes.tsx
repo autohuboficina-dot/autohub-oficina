@@ -1,11 +1,13 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ROLE_LABELS, USER_ROLES, type UserRole } from "../../accessControl";
+import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   deleteUsuario,
   getConfiguracoesOficina,
+  getConfiguracoesOficinaSupabase,
   getUsuarios,
-  saveConfiguracoesOficina,
+  saveConfiguracoesOficinaSupabase,
   saveUsuario,
   updateUsuario,
   type OficinaConfiguracoes,
@@ -40,6 +42,7 @@ const permissionLabels: Record<UserRole, string> = {
 };
 
 export default function Configuracoes({ role }: ConfiguracoesProps) {
+  const { oficina_id } = useAuth();
   const [config, setConfig] = useState<OficinaConfiguracoes>(() => {
     const storedConfig = getConfiguracoesOficina();
 
@@ -54,12 +57,46 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
     useState<UsuarioFormState>(initialUsuarioForm);
   const [editingUsuarioId, setEditingUsuarioId] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [configError, setConfigError] = useState("");
 
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
   const labelClass = "mb-2 block text-sm font-medium text-slate-300";
   const sectionClass =
     "rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm shadow-slate-950/20 sm:p-6";
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadConfig() {
+      setConfigError("");
+
+      if (!oficina_id) {
+        setConfigError(
+          "Não foi possível identificar a oficina do usuário logado.",
+        );
+        return;
+      }
+
+      const loadedConfig = await getConfiguracoesOficinaSupabase(oficina_id);
+
+      if (!isMounted) {
+        return;
+      }
+
+      setConfig({
+        ...loadedConfig,
+        cnpj: formatCpfCnpj(loadedConfig.cnpj),
+        whatsapp: formatPhone(loadedConfig.whatsapp),
+      });
+    }
+
+    loadConfig();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [oficina_id]);
 
   function updateConfigField(field: keyof OficinaConfiguracoes, value: string) {
     setConfig((currentConfig) => ({
@@ -105,13 +142,27 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
     }));
   }
 
-  function handleSaveConfig(event: FormEvent<HTMLFormElement>) {
+  async function handleSaveConfig(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const savedConfig = saveConfiguracoesOficina({
+    setConfigError("");
+
+    if (!oficina_id) {
+      setConfigError(
+        "Não foi possível identificar a oficina do usuário logado.",
+      );
+      return;
+    }
+
+    const configToSave = {
       ...config,
       cnpj: onlyDigits(config.cnpj),
       whatsapp: onlyDigits(config.whatsapp),
-    });
+    };
+    const savedConfig = await saveConfiguracoesOficinaSupabase(
+      oficina_id,
+      configToSave,
+    );
+
     setConfig({
       ...savedConfig,
       cnpj: formatCpfCnpj(savedConfig.cnpj),
@@ -206,6 +257,12 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
       {feedback && (
         <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-200">
           {feedback}
+        </div>
+      )}
+
+      {configError && (
+        <div className="rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200">
+          {configError}
         </div>
       )}
 
