@@ -1,9 +1,10 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
 import {
   getCotacoes,
-  updateCotacao,
+  getPublicCotacaoSupabase,
+  submitPublicCotacaoResponseSupabase,
   type CotacaoPeca,
 } from "../../services/cotacoesService";
 import { getConfiguracoesOficina } from "../../services/configuracoesService";
@@ -81,6 +82,8 @@ export default function FornecedorCotacaoView() {
     Record<string, PieceResponseFormState>
   >(() => createInitialResponses(getCotacoes().find((item) => item.id === id)));
   const [feedback, setFeedback] = useState("");
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const cotacao = useMemo(
     () => cotacoes.find((currentCotacao) => currentCotacao.id === id),
@@ -92,6 +95,41 @@ export default function FornecedorCotacaoView() {
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
   const labelClass = "mb-2 block text-sm font-medium text-slate-300";
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCotacao() {
+      if (!id) {
+        return;
+      }
+
+      const loadedCotacao = await getPublicCotacaoSupabase(id);
+
+      if (!isMounted || !loadedCotacao) {
+        return;
+      }
+
+      setCotacoes((currentCotacoes) =>
+        currentCotacoes.some((currentCotacao) => currentCotacao.id === loadedCotacao.id)
+          ? currentCotacoes.map((currentCotacao) =>
+              currentCotacao.id === loadedCotacao.id ? loadedCotacao : currentCotacao,
+            )
+          : [loadedCotacao, ...currentCotacoes],
+      );
+      setResponsesByPiece(createInitialResponses(loadedCotacao));
+      if (loadedCotacao.responses.length > 0) {
+        setIsSubmitted(true);
+        setFeedback("Resposta enviada com sucesso. Obrigado!");
+      }
+    }
+
+    void loadCotacao();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [id]);
 
   function updatePieceResponse(
     pieceId: string,
@@ -107,10 +145,10 @@ export default function FornecedorCotacaoView() {
     }));
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!cotacao) {
+    if (!cotacao || isSubmitting) {
       return;
     }
 
@@ -136,56 +174,45 @@ export default function FornecedorCotacaoView() {
       return;
     }
 
-    const totalResponseValue = itemResponses.reduce(
-      (total, response) => total + response.preco * response.quantidade,
-      0,
-    );
-    const dataResposta = new Date().toISOString();
-    const updatedCotacao = updateCotacao({
-      ...cotacao,
-      status:
-        cotacao.status === "Cotação enviada"
-          ? "Resposta recebida"
-          : cotacao.status,
-      responses: [
-        ...cotacao.responses,
-        {
-          cotacaoId: cotacao.id,
-          fornecedorId: cotacao.fornecedorId,
-          fornecedorNome: cotacao.fornecedorNome,
-          preco: totalResponseValue,
-          prazo: "",
-          marca: itemResponses.map((response) => response.marca).filter(Boolean).join(" / "),
-          observacao: itemResponses
-            .map((response) => response.observacaoFornecedor)
-            .filter(Boolean)
-            .join(" / "),
-          dataResposta,
-          itemResponses,
-        },
-      ],
-    });
+    setIsSubmitting(true);
+    setFeedback("");
 
-    if (cotacao.osId) {
-      const updatedOrders = getStoredOrders().map((order) =>
-        order.id === cotacao.osId || order.codigo === cotacao.osId
-          ? updateServiceOrderStatusWithTimeline(order, "COTACAO_RECEBIDA", {
-              tipo: "resposta_fornecedor",
-              titulo: "Resposta de fornecedor recebida",
-              descricao: `${cotacao.fornecedorNome} respondeu a cotação ${cotacao.id}.`,
-              usuarioResponsavel: "Fornecedor",
-            })
-          : order,
+    try {
+      const updatedCotacao = await submitPublicCotacaoResponseSupabase(
+        cotacao,
+        itemResponses,
       );
-      saveStoredOrders(updatedOrders);
-    }
 
-    setCotacoes((currentCotacoes) =>
-      currentCotacoes.map((currentCotacao) =>
-        currentCotacao.id === cotacao.id ? updatedCotacao : currentCotacao,
-      ),
-    );
-    setFeedback("Resposta enviada com sucesso. Obrigado!");
+      if (cotacao.osId) {
+        const updatedOrders = getStoredOrders().map((order) =>
+          order.id === cotacao.osId || order.codigo === cotacao.osId
+            ? updateServiceOrderStatusWithTimeline(order, "COTACAO_RECEBIDA", {
+                tipo: "resposta_fornecedor",
+                titulo: "Resposta de fornecedor recebida",
+                descricao: `${cotacao.fornecedorNome} respondeu a cotação ${cotacao.id}.`,
+                usuarioResponsavel: "Fornecedor",
+              })
+            : order,
+        );
+        saveStoredOrders(updatedOrders);
+      }
+
+      setCotacoes((currentCotacoes) =>
+        currentCotacoes.map((currentCotacao) =>
+          currentCotacao.id === cotacao.id ? updatedCotacao : currentCotacao,
+        ),
+      );
+      setIsSubmitted(true);
+      setFeedback("Resposta enviada com sucesso. Obrigado!");
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível enviar a resposta. Tente novamente.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   if (!cotacao) {
@@ -238,6 +265,17 @@ export default function FornecedorCotacaoView() {
       {feedback && (
         <section className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-5 text-emerald-100">
           {feedback}
+        </section>
+      )}
+
+      {isSubmitted && (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="text-xl font-bold text-emerald-300">
+            Resposta registrada
+          </h2>
+          <p className="mt-2 text-slate-300">
+            Resposta enviada com sucesso. Obrigado!
+          </p>
         </section>
       )}
 
@@ -300,6 +338,7 @@ export default function FornecedorCotacaoView() {
         </section>
       )}
 
+      {!isSubmitted && (
       <form
         className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
         onSubmit={handleSubmit}
@@ -325,7 +364,7 @@ export default function FornecedorCotacaoView() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label className={labelClass}>Preço</label>
+                    <label className={labelClass}>Preço unitário</label>
                     <input
                       className={inputClass}
                       min="0"
@@ -347,6 +386,13 @@ export default function FornecedorCotacaoView() {
                         updatePieceResponse(part.id, "marca", event.target.value)
                       }
                     />
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Total da peça</label>
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 px-4 py-3 text-sm font-semibold text-slate-100">
+                      {formatCurrency(Number(response.preco || 0) * part.quantidade)}
+                    </div>
                   </div>
 
                   <div className="sm:col-span-2">
@@ -390,6 +436,7 @@ export default function FornecedorCotacaoView() {
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 }

@@ -33,6 +33,7 @@ import {
 import {
   getCotacoes,
   saveCotacao,
+  saveCotacaoSupabase,
   updateCotacao,
 } from "../../services/cotacoesService";
 import {
@@ -116,6 +117,14 @@ const initialQuoteFormState: QuoteFormState = {
   urgencia: "Normal",
   observacao: "",
   fotos: [],
+};
+
+const EXECUTION_STATUS_TRANSITIONS: Partial<
+  Record<ServiceOrderStatus, ServiceOrderStatus>
+> = {
+  APROVADA: "EM_EXECUCAO",
+  EM_EXECUCAO: "FINALIZADA",
+  FINALIZADA: "ENTREGUE",
 };
 
 function toNumber(value: string) {
@@ -266,6 +275,8 @@ export default function OSDetail() {
       (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
     ),
   );
+  const [isLoadingOrder, setIsLoadingOrder] = useState(Boolean(id));
+  const [hasLoadedOrder, setHasLoadedOrder] = useState(false);
 
   const [clientName, setClientName] = useState(
     order?.clienteDados.nome || order?.cliente || "",
@@ -382,22 +393,37 @@ export default function OSDetail() {
 
     async function loadOrder() {
       if (!id) {
-        setOrder(undefined);
+        if (isMounted) {
+          setOrder(undefined);
+          setIsLoadingOrder(false);
+          setHasLoadedOrder(true);
+        }
         return;
       }
 
-      const loadedOrder = oficina_id
-        ? await getServiceOrderSupabase(oficina_id, id)
-        : getStoredOrders().find(
-            (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
-          );
-
       if (isMounted) {
-        setOrder(loadedOrder);
+        setIsLoadingOrder(true);
+      }
+
+      try {
+        const loadedOrder = oficina_id
+          ? await getServiceOrderSupabase(oficina_id, id)
+          : getStoredOrders().find(
+              (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
+            );
+
+        if (isMounted) {
+          setOrder((currentOrder) => loadedOrder ?? currentOrder);
+          setHasLoadedOrder(true);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingOrder(false);
+        }
       }
     }
 
-    loadOrder();
+    void loadOrder();
 
     return () => {
       isMounted = false;
@@ -787,6 +813,16 @@ export default function OSDetail() {
       return;
     }
 
+    if (
+      ["EM_EXECUCAO", "FINALIZADA", "ENTREGUE"].includes(nextStatus) &&
+      EXECUTION_STATUS_TRANSITIONS[order.status] !== nextStatus
+    ) {
+      setSaveMessage(
+        "Ação inválida para o status atual. Siga a sequência da execução da OS.",
+      );
+      return;
+    }
+
     if (hasConcurrentOrderChange()) {
       setSaveMessage(
         "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
@@ -1118,7 +1154,7 @@ export default function OSDetail() {
     navigate(`/compras?osId=${order.id}`);
   }
 
-  function handleSendQuote() {
+  async function handleSendQuote() {
     if (!order) {
       return;
     }
@@ -1177,7 +1213,7 @@ export default function OSDetail() {
       return;
     }
 
-    saveCotacao({
+    const cotacaoPayload = {
       osId: order.id,
       oficinaNome: oficinaConfig.nomeOficina,
       fornecedorId: selectedFornecedor.id,
@@ -1192,14 +1228,33 @@ export default function OSDetail() {
       clienteNome: clientName.trim(),
       clienteTelefone: onlyDigits(clientPhone),
       veiculo: vehicleInfo,
-    });
+    };
+    let newCotacao;
+
+    try {
+      newCotacao = oficina_id
+        ? await saveCotacaoSupabase(oficina_id, cotacaoPayload)
+        : saveCotacao(cotacaoPayload);
+    } catch (error) {
+      setSaveMessage(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar a cotação.",
+      );
+      return;
+    }
+    const responseLink = `${window.location.origin}/fornecedor/cotacao/${newCotacao.id}`;
+    const whatsappUrlWithLink = createQuoteWhatsappUrl(
+      selectedFornecedor,
+      `${message}\n\nResponda a cotação neste link: ${responseLink}`,
+    );
 
     const updatedOrders = getStoredOrders().map((storedOrder) =>
       storedOrder.id === order.id
         ? updateServiceOrderStatusWithTimeline(storedOrder, "AGUARDANDO_COTACAO", {
             tipo: "cotacao_solicitada",
             titulo: "Cotação solicitada",
-            descricao: `Cotação enviada para ${selectedFornecedor.nome}.`,
+            descricao: `Cotação ${newCotacao.id} enviada para ${selectedFornecedor.nome}.`,
             usuarioResponsavel: "Compras",
           })
         : storedOrder,
@@ -1213,7 +1268,7 @@ export default function OSDetail() {
       syncLoadedVersion(updatedOrder);
     }
 
-    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+    window.open(whatsappUrlWithLink || whatsappUrl, "_blank", "noopener,noreferrer");
     setSaveMessage(`Cotação enviada para ${selectedFornecedor.nome}.`);
     setIsQuoteModalOpen(false);
     resetQuoteForm();
@@ -1371,6 +1426,7 @@ export default function OSDetail() {
       servicosMaoDeObra,
       fotosOs: photos,
       orcamento: {
+        ...order.orcamento,
         totalPecas: totals.partsTotal,
         totalMaoDeObra: totals.laborTotal,
         descontoValor: toNumber(discountValue),
@@ -1399,8 +1455,13 @@ export default function OSDetail() {
       );
       saveStoredOrders(updatedOrders);
       registerStockExitForOrder(savedOrder);
-      syncLoadedVersion(savedOrder);
-      setOrder(savedOrder);
+      const refetchedOrder = await getServiceOrderSupabase(
+        oficina_id,
+        savedOrder.id,
+      );
+      const completeOrder = refetchedOrder ?? savedOrder;
+      syncLoadedVersion(completeOrder);
+      setOrder(completeOrder);
       setSaveMessage("Alterações salvas.");
     } catch (error) {
       setSaveMessage(
@@ -1460,7 +1521,22 @@ export default function OSDetail() {
     }
   }
 
-  if (!order) {
+  if (isLoadingOrder && !order) {
+    return (
+      <div>
+        <BackButton className="mb-6" />
+
+        <section className={sectionClass}>
+          <h2 className="text-3xl font-bold">Carregando OS</h2>
+          <p className="mt-2 text-slate-400">
+            Buscando dados completos da ordem de serviço.
+          </p>
+        </section>
+      </div>
+    );
+  }
+
+  if (!order && hasLoadedOrder) {
     return (
       <div>
         <BackButton className="mb-6" />
@@ -1473,6 +1549,10 @@ export default function OSDetail() {
         </section>
       </div>
     );
+  }
+
+  if (!order) {
+    return null;
   }
 
   return (
@@ -1561,9 +1641,7 @@ export default function OSDetail() {
             Enviar orçamento
           </button>
 
-          {["APROVADA", "APROVADA_PARCIAL", "AGUARDANDO_PECA"].includes(
-            status,
-          ) && (
+          {status === "APROVADA" && (
             <button
               type="button"
               onClick={() =>

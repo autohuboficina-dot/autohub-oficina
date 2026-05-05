@@ -8,6 +8,7 @@ import {
   type ServiceOrderLabor,
   type ServiceOrderPart,
   type ServiceOrderStatus,
+  type ServiceOrderTimelineEvent,
 } from "../pages/os/osStorage";
 import { supabase } from "../lib/supabase";
 
@@ -46,6 +47,7 @@ type OrdemServicoSupabaseRow = {
 
 type OsPecaSupabaseRow = {
   id: string;
+  cotacao_item_id: string | null;
   nome: string;
   quantidade: number;
   valor_unitario: number;
@@ -63,6 +65,17 @@ type OsServicoSupabaseRow = {
   created_at: string;
 };
 
+type TimelineOsSupabaseRow = {
+  id: string;
+  tipo: string | null;
+  tipo_evento: string | null;
+  titulo: string;
+  descricao: string | null;
+  status_anterior: ServiceOrderStatus | null;
+  status_novo: ServiceOrderStatus | null;
+  data_evento: string;
+};
+
 type OrcamentoTotais = {
   totalPecas: number;
   totalServicos: number;
@@ -72,6 +85,17 @@ type OrcamentoTotais = {
 type OrcamentoPublicTokenRow = {
   id: string;
   public_token: string;
+};
+
+type OrcamentoSupabaseRow = {
+  public_token: string | null;
+  total_pecas: number | null;
+  total_mao_de_obra: number | null;
+  desconto_tipo: "valor" | "percentual" | null;
+  desconto_valor: number | null;
+  desconto_aplicado: number | null;
+  forma_pagamento: string | null;
+  total_final: number | null;
 };
 
 function isUuid(value: string) {
@@ -248,26 +272,31 @@ function calculateServiceOrderBudgetTotals(order: ServiceOrder): OrcamentoTotais
   };
 }
 
-async function fetchBudgetPublicToken(oficinaId: string, orderId: string) {
+async function fetchServiceOrderBudgetSupabase(
+  oficinaId: string,
+  orderId: string,
+) {
   if (!supabase || !isUuid(orderId)) {
-    return "";
+    return null;
   }
 
   const { data, error } = await supabase
     .from("orcamentos")
-    .select("public_token")
+    .select(
+      "public_token, total_pecas, total_mao_de_obra, desconto_tipo, desconto_valor, desconto_aplicado, forma_pagamento, total_final",
+    )
     .eq("oficina_id", oficinaId)
     .eq("ordem_servico_id", orderId)
     .order("created_at", { ascending: false })
     .limit(1)
-    .maybeSingle<{ public_token: string }>();
+    .maybeSingle<OrcamentoSupabaseRow>();
 
   if (error) {
-    logSupabaseFallback("orcamentos:publicToken", error);
-    return "";
+    logSupabaseFallback("orcamentos:getByOs", error);
+    return null;
   }
 
-  return data?.public_token ?? "";
+  return data;
 }
 
 function mapPecaFromSupabase(
@@ -283,6 +312,7 @@ function mapPecaFromSupabase(
     quantidade,
     valorUnitario,
     valorTotal: Number(row.valor_total ?? quantidade * valorUnitario),
+    cotacaoPecaId: row.cotacao_item_id ?? undefined,
     origemChecklist: row.origem_checklist ?? undefined,
   };
 }
@@ -296,6 +326,96 @@ function mapServicoFromSupabase(
     servico: row.servico || row.descricao || "Serviço",
     descricao: row.descricao ?? "",
     valor: Number(row.valor || 0),
+  };
+}
+
+function mapTimelineFromSupabase(
+  row: TimelineOsSupabaseRow,
+): ServiceOrderTimelineEvent {
+  return {
+    id: row.id,
+    dataHora: row.data_evento,
+    tipo: row.tipo_evento || row.tipo || "evento",
+    titulo: row.titulo,
+    descricao: row.descricao || "",
+    usuarioResponsavel: "Oficina",
+    statusAnterior: row.status_anterior || "",
+    statusNovo: row.status_novo || "",
+  };
+}
+
+async function fetchServiceOrderTimelineSupabase(
+  oficinaId: string,
+  orderId: string,
+) {
+  if (!supabase || !isUuid(orderId)) {
+    return [] as ServiceOrderTimelineEvent[];
+  }
+
+  const { data, error } = await supabase
+    .from("timeline_os")
+    .select(
+      "id, tipo, tipo_evento, titulo, descricao, status_anterior, status_novo, data_evento",
+    )
+    .eq("oficina_id", oficinaId)
+    .eq("ordem_servico_id", orderId)
+    .order("data_evento", { ascending: false })
+    .returns<TimelineOsSupabaseRow[]>();
+
+  if (error) {
+    logSupabaseFallback("os:timeline:getById", error);
+    return [];
+  }
+
+  return (data ?? []).map(mapTimelineFromSupabase);
+}
+
+async function syncServiceOrderTimelineSupabase(
+  oficinaId: string,
+  order: ServiceOrder,
+) {
+  if (!supabase || !isUuid(order.id)) {
+    return order;
+  }
+
+  const { error: deleteError } = await supabase
+    .from("timeline_os")
+    .delete()
+    .eq("oficina_id", oficinaId)
+    .eq("ordem_servico_id", order.id);
+
+  if (deleteError) {
+    throw deleteError;
+  }
+
+  const timelinePayload = (order.timeline || []).map((event) => ({
+    id: isUuid(event.id) ? event.id : undefined,
+    oficina_id: oficinaId,
+    ordem_servico_id: order.id,
+    tipo: event.tipo || "evento",
+    tipo_evento: event.tipo || "evento",
+    titulo: event.titulo || "Evento",
+    descricao: event.descricao || null,
+    status_anterior: event.statusAnterior || null,
+    status_novo: event.statusNovo || null,
+    data_evento: event.dataHora || new Date().toISOString(),
+  }));
+
+  if (timelinePayload.length) {
+    const { error: insertError } = await supabase
+      .from("timeline_os")
+      .insert(timelinePayload);
+
+    if (insertError) {
+      throw insertError;
+    }
+  }
+
+  const timeline = await fetchServiceOrderTimelineSupabase(oficinaId, order.id);
+
+  return {
+    ...order,
+    timeline: timeline.length ? timeline : order.timeline,
   };
 }
 
@@ -316,7 +436,7 @@ async function fetchServiceOrderItemsSupabase(
     client
       .from("os_pecas")
       .select(
-        "id, nome, quantidade, valor_unitario, valor_total, origem_checklist, observacao, created_at",
+        "id, cotacao_item_id, nome, quantidade, valor_unitario, valor_total, origem_checklist, observacao, created_at",
       )
       .eq("oficina_id", oficinaId)
       .eq("ordem_servico_id", orderId)
@@ -376,6 +496,10 @@ async function syncServiceOrderItemsSupabase(
       nome: part.peca.trim(),
       quantidade: Number(part.quantidade || 0),
       valor_unitario: Number(part.valorUnitario || 0),
+      cotacao_item_id:
+        part.cotacaoPecaId && isUuid(part.cotacaoPecaId)
+          ? part.cotacaoPecaId
+          : null,
       origem_checklist: part.origemChecklist || null,
       observacao: null,
     }));
@@ -622,13 +746,15 @@ export async function getServiceOrderSupabase(oficinaId: string, id: string) {
   const mergedOrder = mergeSupabaseOrder(data);
 
   try {
-    const [items, publicToken] = await Promise.all([
+    const [items, budget, timeline] = await Promise.all([
       fetchServiceOrderItemsSupabase(oficinaId, data.id),
-      fetchBudgetPublicToken(oficinaId, data.id),
+      fetchServiceOrderBudgetSupabase(oficinaId, data.id),
+      fetchServiceOrderTimelineSupabase(oficinaId, data.id),
     ]);
 
     return {
       ...mergedOrder,
+      timeline: timeline.length ? timeline : mergedOrder.timeline,
       pecasNecessarias: items.pecasNecessarias.length
         ? items.pecasNecessarias
         : mergedOrder.pecasNecessarias,
@@ -637,7 +763,28 @@ export async function getServiceOrderSupabase(oficinaId: string, id: string) {
         : mergedOrder.servicosMaoDeObra,
       orcamento: {
         ...mergedOrder.orcamento,
-        publicToken: publicToken || mergedOrder.orcamento.publicToken,
+        publicToken: budget?.public_token || mergedOrder.orcamento.publicToken,
+        totalPecas: Number(
+          budget?.total_pecas ?? mergedOrder.orcamento.totalPecas,
+        ),
+        totalMaoDeObra: Number(
+          budget?.total_mao_de_obra ?? mergedOrder.orcamento.totalMaoDeObra,
+        ),
+        descontoValor: Number(
+          budget?.desconto_valor ?? mergedOrder.orcamento.descontoValor,
+        ),
+        descontoTipo:
+          budget?.desconto_tipo === "percentual"
+            ? "percent"
+            : mergedOrder.orcamento.descontoTipo,
+        descontoAplicado: Number(
+          budget?.desconto_aplicado ?? mergedOrder.orcamento.descontoAplicado,
+        ),
+        formaPagamento:
+          budget?.forma_pagamento ?? mergedOrder.orcamento.formaPagamento,
+        totalFinal: Number(
+          budget?.total_final ?? mergedOrder.orcamento.totalFinal,
+        ),
       },
     };
   } catch (fetchItemsError) {
@@ -698,9 +845,13 @@ export async function createServiceOrderSupabase(
       oficinaId,
       savedOrderWithItems,
     );
+    const savedOrderWithTimeline = await syncServiceOrderTimelineSupabase(
+      oficinaId,
+      savedOrderWithBudget,
+    );
 
-    mirrorLocalOrder(savedOrderWithBudget);
-    return savedOrderWithBudget;
+    mirrorLocalOrder(savedOrderWithTimeline);
+    return savedOrderWithTimeline;
   } catch (syncError) {
     console.error("[Supabase:os:create:items] Falha ao salvar itens/orçamento.", syncError);
     throw new Error("OS criada, mas não foi possível salvar itens ou orçamento.", {
@@ -767,9 +918,13 @@ export async function updateServiceOrderSupabase(
       oficinaId,
       updatedOrderWithItems,
     );
+    const updatedOrderWithTimeline = await syncServiceOrderTimelineSupabase(
+      oficinaId,
+      updatedOrderWithBudget,
+    );
 
-    mirrorLocalOrder(updatedOrderWithBudget);
-    return updatedOrderWithBudget;
+    mirrorLocalOrder(updatedOrderWithTimeline);
+    return updatedOrderWithTimeline;
   } catch (syncError) {
     console.error("[Supabase:os:update:items] Falha ao salvar itens/orçamento.", syncError);
     throw new Error("OS atualizada, mas não foi possível salvar itens ou orçamento.", {
@@ -791,6 +946,8 @@ export const osService = {
   fetchServiceOrderItemsSupabase,
   syncServiceOrderItemsSupabase,
   saveServiceOrderBudgetSupabase,
+  fetchServiceOrderTimelineSupabase,
+  syncServiceOrderTimelineSupabase,
   createNextOrderCode,
   createServiceOrderId,
 };

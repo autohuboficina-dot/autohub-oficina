@@ -387,6 +387,7 @@ create table if not exists timeline_os (
   ordem_servico_id uuid not null references ordens_servico(id) on delete cascade,
   usuario_id uuid references usuarios(id) on delete set null,
   tipo text not null,
+  tipo_evento text,
   titulo text not null,
   descricao text,
   status_anterior os_status,
@@ -395,6 +396,8 @@ create table if not exists timeline_os (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table timeline_os add column if not exists tipo_evento text;
 
 create index if not exists usuarios_oficina_idx on usuarios(oficina_id);
 create index if not exists clientes_oficina_nome_idx on clientes(oficina_id, nome);
@@ -556,6 +559,171 @@ $$;
 
 grant execute on function public_get_orcamento(uuid) to anon, authenticated;
 grant execute on function public_approve_orcamento(uuid, text) to anon, authenticated;
+
+create or replace function public_get_cotacao(p_cotacao_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  result jsonb;
+begin
+  select jsonb_build_object(
+    'id', c.id,
+    'status', c.status,
+    'observacao', c.observacao,
+    'enviada_em', c.enviada_em,
+    'oficina', jsonb_build_object('nome', o.nome),
+    'fornecedor', jsonb_build_object('id', f.id, 'nome', f.nome),
+    'cliente', jsonb_build_object('nome', cli.nome, 'telefone', cli.telefone),
+    'veiculo', jsonb_build_object(
+      'marca', v.marca,
+      'modelo', v.modelo,
+      'ano', v.ano,
+      'motor', v.motor,
+      'combustivel', v.combustivel,
+      'placa', v.placa,
+      'chassi', v.chassi_vin
+    ),
+    'os_id', c.ordem_servico_id,
+    'itens', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'id', ci.id,
+          'peca', ci.nome_peca,
+          'quantidade', ci.quantidade,
+          'observacao', ci.observacao
+        )
+        order by ci.created_at
+      )
+      from cotacao_itens ci
+      where ci.cotacao_id = c.id
+        and ci.oficina_id = c.oficina_id
+    ), '[]'::jsonb),
+    'respostas', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'id', rf.id,
+          'cotacao_id', rf.cotacao_id,
+          'cotacao_item_id', rf.cotacao_item_id,
+          'fornecedor_id', rf.fornecedor_id,
+          'preco', rf.preco,
+          'marca', rf.marca,
+          'observacao', rf.observacao,
+          'data_resposta', rf.data_resposta,
+          'fornecedores', jsonb_build_object('nome', fr.nome)
+        )
+        order by rf.data_resposta
+      )
+      from respostas_fornecedor rf
+      left join fornecedores fr
+        on fr.id = rf.fornecedor_id
+      where rf.cotacao_id = c.id
+        and rf.oficina_id = c.oficina_id
+    ), '[]'::jsonb)
+  )
+  into result
+  from cotacoes c
+  join oficinas o
+    on o.id = c.oficina_id
+  left join fornecedores f
+    on f.id = c.fornecedor_id
+    and f.oficina_id = c.oficina_id
+  left join ordens_servico os
+    on os.id = c.ordem_servico_id
+    and os.oficina_id = c.oficina_id
+  left join clientes cli
+    on cli.id = os.cliente_id
+    and cli.oficina_id = c.oficina_id
+  left join veiculos v
+    on v.id = os.veiculo_id
+    and v.oficina_id = c.oficina_id
+  where c.id = p_cotacao_id
+  limit 1;
+
+  return result;
+end;
+$$;
+
+create or replace function public_submit_cotacao_response(
+  p_cotacao_id uuid,
+  p_items jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  cotacao_row record;
+  item jsonb;
+  item_count integer;
+begin
+  select *
+  into cotacao_row
+  from cotacoes
+  where id = p_cotacao_id
+  limit 1;
+
+  if not found then
+    return jsonb_build_object('success', false, 'message', 'Cotacao nao encontrada.');
+  end if;
+
+  select count(*)
+  into item_count
+  from jsonb_array_elements(coalesce(p_items, '[]'::jsonb));
+
+  if item_count = 0 then
+    return jsonb_build_object('success', false, 'message', 'Informe ao menos uma resposta.');
+  end if;
+
+  for item in select * from jsonb_array_elements(p_items)
+  loop
+    insert into respostas_fornecedor (
+      oficina_id,
+      cotacao_id,
+      cotacao_item_id,
+      fornecedor_id,
+      preco,
+      marca,
+      observacao
+    )
+    select
+      cotacao_row.oficina_id,
+      cotacao_row.id,
+      ci.id,
+      cotacao_row.fornecedor_id,
+      greatest(coalesce((item->>'preco_unitario')::numeric, 0), 0),
+      nullif(item->>'marca', ''),
+      nullif(item->>'observacao', '')
+    from cotacao_itens ci
+    where ci.id = (item->>'cotacao_item_id')::uuid
+      and ci.cotacao_id = cotacao_row.id
+      and ci.oficina_id = cotacao_row.oficina_id;
+  end loop;
+
+  update cotacoes
+  set
+    status = 'RESPOSTA_RECEBIDA',
+    updated_at = now()
+  where id = cotacao_row.id
+    and status = 'COTACAO_ENVIADA';
+
+  update ordens_servico
+  set
+    status = 'COTACAO_RECEBIDA',
+    version = version + 1,
+    updated_at = now()
+  where id = cotacao_row.ordem_servico_id
+    and oficina_id = cotacao_row.oficina_id;
+
+  return jsonb_build_object('success', true);
+end;
+$$;
+
+grant execute on function public_get_cotacao(uuid) to anon, authenticated;
+grant execute on function public_submit_cotacao_response(uuid, jsonb) to anon, authenticated;
 
 drop trigger if exists set_oficinas_updated_at on oficinas;
 create trigger set_oficinas_updated_at

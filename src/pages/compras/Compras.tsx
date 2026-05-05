@@ -1,11 +1,15 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useAuth } from "../../contexts/useAuth";
 import { formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   getCotacoes,
+  getCotacoesSupabase,
   saveCotacao,
+  saveCotacaoSupabase,
   updateCotacao,
+  updateCotacaoSupabase,
   type CotacaoFornecedorResponse,
   type CotacaoPecaEscolha,
   type CotacaoPecaItem,
@@ -262,6 +266,7 @@ function getCotacaoStatusAfterChoice(
 
 export default function Compras() {
   const [searchParams] = useSearchParams();
+  const { oficina_id } = useAuth();
   const osId = searchParams.get("osId") || "";
   const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
@@ -316,7 +321,29 @@ export default function Compras() {
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
   const labelClass = "mb-2 block text-sm font-medium text-slate-300";
 
-  function handleQuoteSubmit(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCotacoes() {
+      if (!oficina_id) {
+        return;
+      }
+
+      const loadedCotacoes = await getCotacoesSupabase(oficina_id);
+
+      if (isMounted) {
+        setCotacoes(loadedCotacoes);
+      }
+    }
+
+    void loadCotacoes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [oficina_id]);
+
+  async function handleQuoteSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!selectedFornecedor) {
@@ -345,7 +372,7 @@ export default function Compras() {
           },
         ];
     const mainQuoteItem = quoteItems[0];
-    const newCotacao = saveCotacao({
+    const cotacaoPayload = {
       osId: linkedOrder?.id || "",
       oficinaNome: oficinaConfig.nomeOficina,
       fornecedorId: selectedFornecedor.id,
@@ -364,7 +391,21 @@ export default function Compras() {
         linkedOrder?.telefone ||
         "",
       veiculo: linkedOrderVehicle,
-    });
+    };
+    let newCotacao: CotacaoPeca;
+
+    try {
+      newCotacao = oficina_id
+        ? await saveCotacaoSupabase(oficina_id, cotacaoPayload)
+        : saveCotacao(cotacaoPayload);
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar a cotação.",
+      );
+      return;
+    }
     if (linkedOrder) {
       const updatedOrders = getStoredOrders().map((order) =>
         order.id === linkedOrder.id || order.codigo === linkedOrder.id
@@ -417,7 +458,7 @@ export default function Compras() {
     const whatsappUrl = createWhatsappUrl(selectedFornecedor, message);
 
     window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-    setCotacoes(getCotacoes());
+    setCotacoes((currentCotacoes) => [newCotacao, ...currentCotacoes]);
     setFeedback(`Cotação enviada para ${selectedFornecedor.nome}.`);
   }
 
@@ -448,7 +489,7 @@ export default function Compras() {
       return;
     }
 
-    const updatedCotacao = updateCotacao({
+    const nextCotacao = {
       ...cotacao,
       status:
         cotacao.status === "Cotação enviada"
@@ -478,6 +519,15 @@ export default function Compras() {
           ],
         },
       ],
+    };
+    const updatedCotacao = updateCotacao(nextCotacao);
+
+    void updateCotacaoSupabase(nextCotacao).catch((error) => {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar a resposta no Supabase.",
+      );
     });
 
     setCotacoes((currentCotacoes) =>
@@ -533,7 +583,7 @@ export default function Compras() {
       (total, choice) => total + choice.preco * choice.quantidade,
       0,
     );
-    const updatedCotacao = updateCotacao({
+    const nextCotacao = {
       ...cotacao,
       status: nextStatus,
       fornecedorEscolhidoId: response.fornecedorId,
@@ -544,6 +594,15 @@ export default function Compras() {
       marcaSelecionada: itemResponse.marca,
       prazoSelecionado: "",
       pecasEscolhidas: nextChoices,
+    };
+    const updatedCotacao = updateCotacao(nextCotacao);
+
+    void updateCotacaoSupabase(nextCotacao).catch((error) => {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar a escolha no Supabase.",
+      );
     });
 
     if (hasLinkedOrder) {
@@ -1036,8 +1095,9 @@ export default function Compras() {
                           >
                             <p className="font-medium">{choice.nomePeca}</p>
                             <p className="mt-1 text-xs text-emerald-100/80">
-                              {choice.fornecedorNome} ·{" "}
-                              {formatCurrency(choice.preco)} ·{" "}
+                          {choice.fornecedorNome} · Preço unitário:{" "}
+                          {formatCurrency(choice.preco)} · Total:{" "}
+                          {formatCurrency(choice.preco * choice.quantidade)} ·{" "}
                               {choice.marca || "Marca não informada"}
                             </p>
                           </div>
@@ -1090,7 +1150,7 @@ export default function Compras() {
                         </div>
 
                         <div>
-                          <label className={labelClass}>Preço</label>
+                          <label className={labelClass}>Preço unitário</label>
                           <input
                             className={inputClass}
                             type="number"
@@ -1134,6 +1194,14 @@ export default function Compras() {
                               }))
                             }
                           />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Total da peça</label>
+                          <div className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-3 text-sm font-semibold text-slate-100">
+                            {formatCurrency(
+                              Number(responseForm.preco || 0) * cotacao.quantidade,
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -1224,7 +1292,7 @@ export default function Compras() {
                                       return (
                                         <div
                                           key={`${cotacaoPart.id}-${response.fornecedorId}-${itemResponse.dataHora}`}
-                                          className="grid gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 md:grid-cols-[1.2fr_120px_1fr_1.2fr_auto] md:items-center"
+                                          className="grid gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 md:grid-cols-[1.2fr_140px_140px_1fr_1.2fr_auto] md:items-center"
                                         >
                                           <div>
                                             <span className="text-xs uppercase text-slate-500">
@@ -1236,7 +1304,7 @@ export default function Compras() {
                                           </div>
                                           <div>
                                             <span className="text-xs uppercase text-slate-500">
-                                              Preço
+                                              Preço unitário
                                             </span>
                                             <p
                                               className={
@@ -1246,6 +1314,17 @@ export default function Compras() {
                                               }
                                             >
                                               {formatCurrency(itemResponse.preco)}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <span className="text-xs uppercase text-slate-500">
+                                              Total
+                                            </span>
+                                            <p className="mt-1 text-sm font-semibold text-slate-100">
+                                              {formatCurrency(
+                                                itemResponse.preco *
+                                                  itemResponse.quantidade,
+                                              )}
                                             </p>
                                           </div>
                                           <div>
