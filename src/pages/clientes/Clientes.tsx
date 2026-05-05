@@ -1,14 +1,16 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
   createClienteVeiculoId,
-  deleteCliente,
   getClientes,
-  saveCliente,
-  updateCliente,
+  getClientesSupabase,
+  saveClienteSupabase,
+  updateClienteSupabase,
+  deleteClienteSupabase,
   type Cliente,
   type ClienteTipo,
   type ClienteVeiculo,
@@ -58,6 +60,7 @@ function normalizePlate(value: string) {
 
 export default function Clientes() {
   const navigate = useNavigate();
+  const { oficina_id } = useAuth();
   const [clientes, setClientes] = useState<Cliente[]>(() => getClientes());
   const [form, setForm] = useState<ClienteForm>(createBlankForm);
   const [showForm, setShowForm] = useState(false);
@@ -65,6 +68,8 @@ export default function Clientes() {
   const [selectedCliente, setSelectedCliente] = useState<Cliente | null>(null);
   const [search, setSearch] = useState("");
   const [formError, setFormError] = useState("");
+  const [isLoadingClientes, setIsLoadingClientes] = useState(Boolean(oficina_id));
+  const [clientesLoadMessage, setClientesLoadMessage] = useState("");
 
   const isEditing = Boolean(editingCliente);
   const filteredClientes = useMemo(() => {
@@ -96,9 +101,51 @@ export default function Clientes() {
   const sectionClass =
     "rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm shadow-slate-950/20 sm:p-6";
 
-  function refreshClientes() {
-    setClientes(getClientes());
+  async function refreshClientes() {
+    if (!oficina_id) {
+      setFormError("Não foi possível identificar a oficina do usuário logado.");
+      setClientes(getClientes());
+      return;
+    }
+
+    setIsLoadingClientes(true);
+    const loadedClientes = await getClientesSupabase(oficina_id);
+    setClientes(loadedClientes);
+    setClientesLoadMessage(
+      loadedClientes.length === 0 ? "Nenhum cliente cadastrado ainda." : "",
+    );
+    setIsLoadingClientes(false);
   }
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadClientes() {
+      if (!oficina_id) {
+        setFormError("Não foi possível identificar a oficina do usuário logado.");
+        setClientes(getClientes());
+        setIsLoadingClientes(false);
+        return;
+      }
+
+      setIsLoadingClientes(true);
+      const loadedClientes = await getClientesSupabase(oficina_id);
+
+      if (isMounted) {
+        setClientes(loadedClientes);
+        setClientesLoadMessage(
+          loadedClientes.length === 0 ? "Nenhum cliente cadastrado ainda." : "",
+        );
+        setIsLoadingClientes(false);
+      }
+    }
+
+    loadClientes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [oficina_id]);
 
   function resetForm() {
     setForm(createBlankForm());
@@ -132,21 +179,35 @@ export default function Clientes() {
     setShowForm(true);
   }
 
-  function handleDeleteCliente(cliente: Cliente) {
+  async function handleDeleteCliente(cliente: Cliente) {
     const shouldDelete = window.confirm(`Excluir cliente ${cliente.nome}?`);
 
     if (!shouldDelete) {
       return;
     }
 
-    deleteCliente(cliente.id);
+    if (!oficina_id) {
+      setFormError("Não foi possível identificar a oficina do usuário logado.");
+      return;
+    }
+
+    try {
+      await deleteClienteSupabase(oficina_id, cliente.id);
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível excluir o cliente.",
+      );
+      return;
+    }
     if (selectedCliente?.id === cliente.id) {
       setSelectedCliente(null);
     }
     if (editingCliente?.id === cliente.id) {
       resetForm();
     }
-    refreshClientes();
+    await refreshClientes();
   }
 
   function updateVehicle(
@@ -228,8 +289,13 @@ export default function Clientes() {
     return "";
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (!oficina_id) {
+      setFormError("Não foi possível identificar a oficina do usuário logado.");
+      return;
+    }
 
     const veiculos = form.veiculos.map((veiculo) => ({
       ...veiculo,
@@ -261,17 +327,26 @@ export default function Clientes() {
       quantidadeVeiculos: veiculos.length,
     };
 
-    if (editingCliente) {
-      updateCliente({
-        ...editingCliente,
-        ...clienteData,
-      });
-    } else {
-      saveCliente(clienteData);
+    try {
+      if (editingCliente) {
+        await updateClienteSupabase(oficina_id, {
+          ...editingCliente,
+          ...clienteData,
+        });
+      } else {
+        await saveClienteSupabase(oficina_id, clienteData);
+      }
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar o cliente.",
+      );
+      return;
     }
 
     resetForm();
-    refreshClientes();
+    await refreshClientes();
   }
 
   return (
@@ -658,6 +733,18 @@ export default function Clientes() {
             {filteredClientes.length} de {clientes.length} registro(s)
           </span>
         </div>
+
+        {isLoadingClientes && (
+          <div className="mb-4 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+            Carregando clientes...
+          </div>
+        )}
+
+        {clientesLoadMessage && !isLoadingClientes && clientes.length === 0 && (
+          <div className="mb-4 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+            {clientesLoadMessage}
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../contexts/useAuth";
 import {
   getBudgetApprovalBadgeClass,
   getBudgetApprovalLabel,
@@ -7,20 +8,47 @@ import {
   getServiceOrderStatusLabel,
   getServiceOrderStorageError,
   getStoredOrders,
+  getStoredOrdersSupabase,
   type ServiceOrder,
 } from "../../services/osService";
 
 export default function OSList() {
   const navigate = useNavigate();
+  const { oficina_id } = useAuth();
   const [ordens, setOrdens] = useState<ServiceOrder[]>(() => getStoredOrders());
   const [storageError, setStorageError] = useState(() =>
     getServiceOrderStorageError(),
   );
+  const [isLoadingOrders, setIsLoadingOrders] = useState(Boolean(oficina_id));
 
-  function reloadOrders() {
-    setOrdens(getStoredOrders());
+  async function reloadOrders() {
+    setIsLoadingOrders(true);
+    setOrdens(oficina_id ? await getStoredOrdersSupabase(oficina_id) : getStoredOrders());
     setStorageError(getServiceOrderStorageError());
+    setIsLoadingOrders(false);
   }
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadOrders() {
+      const loadedOrders = oficina_id
+        ? await getStoredOrdersSupabase(oficina_id)
+        : getStoredOrders();
+
+      if (isMounted) {
+        setOrdens(loadedOrders);
+        setStorageError(getServiceOrderStorageError());
+        setIsLoadingOrders(false);
+      }
+    }
+
+    loadOrders();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [oficina_id]);
 
   return (
     <div>
@@ -45,6 +73,12 @@ export default function OSList() {
           >
             Recarregar dados
           </button>
+        </div>
+      )}
+
+      {isLoadingOrders && (
+        <div className="mb-6 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-400">
+          Carregando ordens de serviço...
         </div>
       )}
 

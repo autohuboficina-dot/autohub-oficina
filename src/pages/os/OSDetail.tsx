@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import { getClientes, type Cliente } from "../../services/clientesService";
 import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
@@ -16,9 +17,12 @@ import {
   getServiceOrderStatusLabel,
   getServiceOrderStatusForBudgetDecision,
   getServiceOrderStatusBadgeClass,
+  getServiceOrderSupabase,
   getStoredOrders,
   isServiceOrderBudgetLocked,
+  saveServiceOrderBudgetSupabase,
   saveStoredOrders,
+  updateServiceOrderSupabase,
   updateServiceOrderStatusWithTimeline,
   type BudgetApprovalStatus,
   type ChecklistStatus,
@@ -142,12 +146,12 @@ function formatDate(value: string) {
   }).format(date);
 }
 
-function createBudgetLink(orderId: string) {
+function createBudgetLink(publicToken: string) {
   if (typeof window === "undefined") {
-    return `/orcamento/${orderId}`;
+    return `/orcamento/${publicToken}`;
   }
 
-  return `${window.location.origin}/orcamento/${orderId}`;
+  return `${window.location.origin}/orcamento/${publicToken}`;
 }
 
 function getWhatsAppPhone(value: string) {
@@ -253,16 +257,14 @@ function createLaborLines(order?: ServiceOrder): LaborLine[] {
 export default function OSDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const storedOrders = useMemo(() => getStoredOrders(), []);
+  const { oficina_id } = useAuth();
   const [clientes] = useState<Cliente[]>(() => getClientes());
   const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
-  const order = useMemo(
-    () =>
-      storedOrders.find(
-        (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
-      ),
-    [id, storedOrders],
+  const [order, setOrder] = useState<ServiceOrder | undefined>(() =>
+    getStoredOrders().find(
+      (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
+    ),
   );
 
   const [clientName, setClientName] = useState(
@@ -375,6 +377,93 @@ export default function OSDetail() {
   const [quoteForm, setQuoteForm] =
     useState<QuoteFormState>(initialQuoteFormState);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadOrder() {
+      if (!id) {
+        setOrder(undefined);
+        return;
+      }
+
+      const loadedOrder = oficina_id
+        ? await getServiceOrderSupabase(oficina_id, id)
+        : getStoredOrders().find(
+            (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
+          );
+
+      if (isMounted) {
+        setOrder(loadedOrder);
+      }
+    }
+
+    loadOrder();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [id, oficina_id]);
+
+  useEffect(() => {
+    if (!order) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    queueMicrotask(() => {
+      if (isCancelled) {
+        return;
+      }
+
+      setClientName(order.clienteDados.nome || order.cliente || "");
+      setClientPhone(formatPhone(order.clienteDados.telefone || order.telefone || ""));
+      setClientCpf(formatCpfCnpj(order.clienteDados.cpf || ""));
+      setClientCnpj(formatCpfCnpj(order.clienteDados.cnpj || ""));
+      setClientEmail(order.clienteDados.email || "");
+      setSelectedClienteId(order.clienteId || "");
+      setSelectedVehicleId(order.veiculoId || "");
+      setVehicleBrand(order.veiculoDados.marca || "");
+      setVehicleModel(order.veiculoDados.modelo || "");
+      setVehicleYear(order.veiculoDados.ano || "");
+      setVehiclePlate(order.veiculoDados.placa || order.placa || "");
+      setVehicleMotor(order.veiculoDados.motor || "");
+      setVehicleFuel(order.veiculoDados.combustivel || "");
+      setVehicleVin(order.veiculoDados.chassiVin || "");
+      setVehicleKm(order.veiculoDados.kmAtual || "");
+      setStatus(order.status || "ABERTA");
+      setApprovalStatus(order.statusAprovacao || "pendente");
+      setApprovalConfirmationDate(order.dataConfirmacaoOficina || "");
+      setOfficeConfirmedApproval(Boolean(order.confirmacaoOficina));
+      setClientDecision(order.decisaoCliente || order.statusAprovacao || "");
+      setProblemReport(order.problemaRelatado || order.servicoInicial || "");
+      setDefectFound(order.diagnostico.defeitoEncontrado || "");
+      setProbableCause(order.diagnostico.causaProvavel || "");
+      setRecommendedSolution(order.diagnostico.solucaoRecomendada || "");
+      setChecklistState(createChecklistState(order));
+      setPartLines(createPartLines(order));
+      setLaborLines(createLaborLines(order));
+      setPhotos(order.fotosOs || []);
+      setTimeline(order.timeline || []);
+      setLoadedUpdatedAt(order.updatedAt || "");
+      setLoadedVersion(order.version || 0);
+      setDiscountValue(String(order.orcamento.descontoValor || ""));
+      setDiscountType(order.orcamento.descontoTipo ?? "money");
+      setPaymentMethod(order.orcamento.formaPagamento || "");
+      setRequiresDeposit(Boolean(order.exigeEntrada));
+      setDepositType(order.tipoEntrada || "valor");
+      setDepositValue(String(order.valorEntrada || ""));
+      setDepositPercent(String(order.percentualEntrada || ""));
+      setDepositStatus(order.statusEntrada || "nao_exige");
+      setDepositPaymentDate(order.dataPagamentoEntrada || "");
+      setDepositPaidValue(order.valorEntradaPago || 0);
+    });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [order]);
+
   const selectedCliente = useMemo(
     () => clientes.find((cliente) => cliente.id === selectedClienteId),
     [clientes, selectedClienteId],
@@ -385,7 +474,9 @@ export default function OSDetail() {
     [fornecedores, quoteForm.fornecedorId],
   );
   const modelSuggestions = vehicleModelsByBrand[vehicleBrand] ?? [];
-  const budgetLink = order ? createBudgetLink(order.id) : "";
+  const budgetLink = order
+    ? createBudgetLink(order.orcamento.publicToken || order.id)
+    : "";
   const budgetWhatsappUrl = order
     ? createBudgetWhatsappUrl(
         clientPhone || order.clienteTelefone || order.telefone,
@@ -689,7 +780,7 @@ export default function OSDetail() {
     setVehicleVin(veiculo?.chassiVin || "");
   }
 
-  function handleStatusChange(nextStatus: ServiceOrderStatus) {
+  async function handleStatusChange(nextStatus: ServiceOrderStatus) {
     setStatus(nextStatus);
 
     if (!order) {
@@ -719,14 +810,28 @@ export default function OSDetail() {
     );
 
     if (updatedOrder) {
-      syncLoadedVersion(updatedOrder);
-      registerStockExitForOrder(updatedOrder);
+      try {
+        const savedOrder = oficina_id
+          ? await updateServiceOrderSupabase(oficina_id, updatedOrder)
+          : updatedOrder;
+
+        syncLoadedVersion(savedOrder);
+        registerStockExitForOrder(savedOrder);
+        setOrder(savedOrder);
+      } catch (error) {
+        setSaveMessage(
+          error instanceof Error
+            ? error.message
+            : "Não foi possível atualizar o status.",
+        );
+        return;
+      }
     }
 
     setSaveMessage("Status atualizado.");
   }
 
-  function handleManualStatusAction(
+  async function handleManualStatusAction(
     nextStatus: ServiceOrderStatus,
     titulo: string,
     descricao: string,
@@ -761,8 +866,22 @@ export default function OSDetail() {
     );
 
     if (updatedOrder) {
-      syncLoadedVersion(updatedOrder);
-      registerStockExitForOrder(updatedOrder);
+      try {
+        const savedOrder = oficina_id
+          ? await updateServiceOrderSupabase(oficina_id, updatedOrder)
+          : updatedOrder;
+
+        syncLoadedVersion(savedOrder);
+        registerStockExitForOrder(savedOrder);
+        setOrder(savedOrder);
+      } catch (error) {
+        setSaveMessage(
+          error instanceof Error
+            ? error.message
+            : "Não foi possível atualizar a OS.",
+        );
+        return;
+      }
     }
 
     setSaveMessage(descricao || titulo);
@@ -1100,8 +1219,13 @@ export default function OSDetail() {
     resetQuoteForm();
   }
 
-  function handleSaveChanges() {
+  async function handleSaveChanges() {
     if (!order) {
+      return;
+    }
+
+    if (!oficina_id) {
+      setSaveMessage("Não foi possível identificar a oficina do usuário logado.");
       return;
     }
 
@@ -1125,6 +1249,16 @@ export default function OSDetail() {
 
     if (!clientName.trim()) {
       setSaveMessage("Informe o cliente antes de salvar a OS.");
+      return;
+    }
+
+    if (!selectedClienteId) {
+      setSaveMessage("Selecione um cliente vinculado antes de salvar a OS.");
+      return;
+    }
+
+    if (!selectedVehicleId) {
+      setSaveMessage("Selecione um veículo vinculado antes de salvar a OS.");
       return;
     }
 
@@ -1255,13 +1389,75 @@ export default function OSDetail() {
       statusNovo: status,
     });
 
-    const updatedOrders = getStoredOrders().map((storedOrder) =>
-      storedOrder.id === order.id ? orderWithTimeline : storedOrder,
-    );
-    saveStoredOrders(updatedOrders);
-    registerStockExitForOrder(orderWithTimeline);
-    syncLoadedVersion(orderWithTimeline);
-    setSaveMessage("Alterações salvas.");
+    try {
+      const savedOrder = await updateServiceOrderSupabase(
+        oficina_id,
+        orderWithTimeline,
+      );
+      const updatedOrders = getStoredOrders().map((storedOrder) =>
+        storedOrder.id === order.id ? savedOrder : storedOrder,
+      );
+      saveStoredOrders(updatedOrders);
+      registerStockExitForOrder(savedOrder);
+      syncLoadedVersion(savedOrder);
+      setOrder(savedOrder);
+      setSaveMessage("Alterações salvas.");
+    } catch (error) {
+      setSaveMessage(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar as alterações.",
+      );
+    }
+  }
+
+  async function handleGenerateBudget() {
+    if (!order) {
+      return;
+    }
+
+    if (!oficina_id) {
+      setSaveMessage("Não foi possível identificar a oficina do usuário logado.");
+      return;
+    }
+
+    try {
+      const orderWithBudget = await saveServiceOrderBudgetSupabase(
+        oficina_id,
+        {
+          ...order,
+          pecasNecessarias: partLines.map((line) => {
+            const quantidade = toNumber(line.quantity);
+            const valorUnitario = toNumber(line.unitValue);
+
+            return {
+              id: line.id,
+              peca: line.name.trim(),
+              quantidade,
+              valorUnitario,
+              valorTotal: quantidade * valorUnitario,
+              compraId: line.compraId,
+              origemChecklist: line.generatedFromChecklist,
+            };
+          }),
+          servicosMaoDeObra: laborLines.map((line) => ({
+            id: line.id,
+            servico: line.service.trim(),
+            descricao: line.description.trim(),
+            valor: toNumber(line.value),
+          })),
+        },
+      );
+
+      setOrder(orderWithBudget);
+      setSaveMessage("Orçamento gerado como rascunho.");
+    } catch (error) {
+      setSaveMessage(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível gerar o orçamento.",
+      );
+    }
   }
 
   if (!order) {
@@ -2389,6 +2585,10 @@ export default function OSDetail() {
                   {formatCurrency(totals.finalTotal)}
                 </strong>
               </div>
+              <div className="flex items-center justify-between gap-4 border-t border-slate-800 pt-3">
+                <span className="text-sm text-slate-400">Total geral</span>
+                <strong>{formatCurrency(totals.partsTotal + totals.laborTotal)}</strong>
+              </div>
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
                 <p className="font-semibold text-slate-100">
                   Entrada/sinal: {formatCurrency(depositSummary.entradaCalculada)}
@@ -2660,6 +2860,14 @@ export default function OSDetail() {
             className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
           >
             Enviar orçamento
+          </button>
+
+          <button
+            type="button"
+            onClick={handleGenerateBudget}
+            className="rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-400"
+          >
+            Gerar orçamento
           </button>
 
           <button

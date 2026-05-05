@@ -25,6 +25,8 @@ begin
 
   if not exists (select 1 from pg_type where typname = 'orcamento_status') then
     create type orcamento_status as enum (
+      'RASCUNHO',
+      'APROVADO',
       'PENDENTE',
       'PRE_APROVADO',
       'PRE_APROVADO_PARCIAL',
@@ -73,6 +75,9 @@ begin
     );
   end if;
 end $$;
+
+alter type orcamento_status add value if not exists 'RASCUNHO';
+alter type orcamento_status add value if not exists 'APROVADO';
 
 create or replace function set_updated_at()
 returns trigger as $$
@@ -303,6 +308,10 @@ create table if not exists orcamentos (
   id uuid primary key default gen_random_uuid(),
   oficina_id uuid not null references oficinas(id) on delete cascade,
   ordem_servico_id uuid not null references ordens_servico(id) on delete cascade,
+  public_token uuid not null default gen_random_uuid(),
+  public_expires_at timestamptz,
+  aprovado_em timestamptz,
+  aprovado_ip text,
   version integer not null default 1,
   status orcamento_status not null default 'PENDENTE',
   total_pecas numeric(12, 2) not null default 0,
@@ -327,6 +336,11 @@ create table if not exists orcamentos (
     and total_final >= 0
   )
 );
+
+alter table orcamentos add column if not exists public_token uuid not null default gen_random_uuid();
+alter table orcamentos add column if not exists public_expires_at timestamptz;
+alter table orcamentos add column if not exists aprovado_em timestamptz;
+alter table orcamentos add column if not exists aprovado_ip text;
 
 create table if not exists orcamento_revisoes (
   id uuid primary key default gen_random_uuid(),
@@ -402,10 +416,146 @@ create index if not exists cotacao_itens_cotacao_idx on cotacao_itens(cotacao_id
 create index if not exists respostas_fornecedor_cotacao_idx on respostas_fornecedor(cotacao_id);
 create index if not exists respostas_fornecedor_item_idx on respostas_fornecedor(cotacao_item_id);
 create index if not exists orcamentos_ordem_idx on orcamentos(ordem_servico_id);
+create unique index if not exists orcamentos_public_token_unique_idx on orcamentos(public_token);
 create index if not exists orcamento_revisoes_ordem_idx on orcamento_revisoes(ordem_servico_id);
 create index if not exists financeiro_oficina_data_idx on financeiro(oficina_id, data_lancamento);
 create index if not exists financeiro_ordem_idx on financeiro(ordem_servico_id);
 create index if not exists timeline_os_ordem_data_idx on timeline_os(ordem_servico_id, data_evento desc);
+
+create or replace function public_get_orcamento(p_public_token uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  result jsonb;
+begin
+  select jsonb_build_object(
+    'id', o.id,
+    'public_token', o.public_token,
+    'status', o.status,
+    'public_expires_at', o.public_expires_at,
+    'aprovado_em', o.aprovado_em,
+    'os_status', os.status,
+    'cliente', jsonb_build_object(
+      'nome', c.nome,
+      'telefone', c.telefone
+    ),
+    'veiculo', jsonb_build_object(
+      'marca', v.marca,
+      'modelo', v.modelo,
+      'ano', v.ano,
+      'placa', v.placa
+    ),
+    'ordem_servico', jsonb_build_object(
+      'problema_relatado', os.problema_relatado
+    ),
+    'pecas', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'id', p.id,
+          'nome', p.nome,
+          'quantidade', p.quantidade,
+          'valor_unitario', p.valor_unitario,
+          'valor_total', p.valor_total
+        )
+        order by p.created_at
+      )
+      from os_pecas p
+      where p.oficina_id = o.oficina_id
+        and p.ordem_servico_id = o.ordem_servico_id
+    ), '[]'::jsonb),
+    'servicos', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'id', s.id,
+          'descricao', coalesce(nullif(s.servico, ''), s.descricao),
+          'valor', s.valor
+        )
+        order by s.created_at
+      )
+      from os_servicos s
+      where s.oficina_id = o.oficina_id
+        and s.ordem_servico_id = o.ordem_servico_id
+    ), '[]'::jsonb),
+    'totais', jsonb_build_object(
+      'total_pecas', o.total_pecas,
+      'total_servicos', o.total_mao_de_obra,
+      'total_final', o.total_final
+    )
+  )
+  into result
+  from orcamentos o
+  join ordens_servico os
+    on os.id = o.ordem_servico_id
+    and os.oficina_id = o.oficina_id
+  left join clientes c
+    on c.id = os.cliente_id
+    and c.oficina_id = o.oficina_id
+  left join veiculos v
+    on v.id = os.veiculo_id
+    and v.oficina_id = o.oficina_id
+  where o.public_token = p_public_token
+    and (o.public_expires_at is null or o.public_expires_at > now())
+  limit 1;
+
+  return result;
+end;
+$$;
+
+create or replace function public_approve_orcamento(
+  p_public_token uuid,
+  p_aprovado_ip text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  updated_budget record;
+begin
+  update orcamentos
+  set
+    status = 'APROVADO',
+    aprovado_em = now(),
+    aprovado_ip = p_aprovado_ip,
+    updated_at = now()
+  where public_token = p_public_token
+    and status = 'RASCUNHO'
+    and (public_expires_at is null or public_expires_at > now())
+  returning id, oficina_id, ordem_servico_id, status, aprovado_em
+  into updated_budget;
+
+  if not found then
+    return jsonb_build_object(
+      'success', false,
+      'message', 'Orcamento indisponivel, expirado ou ja aprovado.'
+    );
+  end if;
+
+  update ordens_servico
+  set
+    status = 'APROVADA',
+    version = version + 1,
+    updated_at = now()
+  where id = updated_budget.ordem_servico_id
+    and oficina_id = updated_budget.oficina_id;
+
+  return jsonb_build_object(
+    'success', true,
+    'id', updated_budget.id,
+    'ordem_servico_id', updated_budget.ordem_servico_id,
+    'status', updated_budget.status,
+    'os_status', 'APROVADA',
+    'aprovado_em', updated_budget.aprovado_em
+  );
+end;
+$$;
+
+grant execute on function public_get_orcamento(uuid) to anon, authenticated;
+grant execute on function public_approve_orcamento(uuid, text) to anon, authenticated;
 
 drop trigger if exists set_oficinas_updated_at on oficinas;
 create trigger set_oficinas_updated_at
@@ -516,7 +666,7 @@ comment on table os_fotos is 'RLS enabled. Add oficina_id scoped policies and st
 comment on table cotacoes is 'RLS enabled. Add oficina_id scoped policies and public supplier access strategy later.';
 comment on table cotacao_itens is 'RLS enabled. Add oficina_id scoped policies before frontend Supabase integration.';
 comment on table respostas_fornecedor is 'RLS enabled. Add oficina_id scoped policies and signed supplier access later.';
-comment on table orcamentos is 'RLS enabled. Add oficina_id scoped policies and public budget access strategy later.';
+comment on table orcamentos is 'RLS enabled. Oficina access must use tenant policies. Public customer access must use public_token RPC functions, not table listing.';
 comment on table orcamento_revisoes is 'RLS enabled. Add oficina_id scoped policies before frontend Supabase integration.';
 comment on table financeiro is 'RLS enabled. Add oficina_id scoped policies before frontend Supabase integration.';
 comment on table timeline_os is 'RLS enabled. Add oficina_id scoped policies before frontend Supabase integration.';

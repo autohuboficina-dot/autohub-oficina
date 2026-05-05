@@ -29,6 +29,10 @@ type OficinaSupabaseRow = {
   regras_pagamento: OficinaConfiguracoes["regrasPagamento"] | null;
 };
 
+function logSupabaseFallback(scope: string, error: unknown) {
+  console.error(`[Supabase:${scope}] Usando fallback localStorage.`, error);
+}
+
 export type {
   DescontoPagamento,
   OficinaConfiguracoes,
@@ -144,6 +148,7 @@ export async function getConfiguracoesOficinaSupabase(oficinaId: string) {
     .maybeSingle<OficinaSupabaseRow>();
 
   if (error || !data) {
+    logSupabaseFallback("configuracoes:get", error);
     return localConfig;
   }
 
@@ -170,6 +175,7 @@ export async function saveConfiguracoesOficinaSupabase(
     .single<OficinaSupabaseRow>();
 
   if (error || !data) {
+    logSupabaseFallback("configuracoes:save", error);
     return saveConfiguracoesOficina(normalizedConfig);
   }
 

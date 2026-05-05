@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { supabase } from "../../lib/supabase";
 import { formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   getBudgetApprovalBadgeClass,
@@ -27,6 +28,70 @@ type ApprovalItem = {
 };
 
 type ChecklistVisualStatus = "OK" | "Atenção" | "Trocar";
+
+type PublicBudgetStatus = "idle" | "loading" | "ready" | "not_found" | "error";
+
+type PublicBudget = {
+  id: string;
+  status: string;
+  osStatus: string;
+  publicExpiresAt: string;
+  aprovadoEm: string;
+  cliente: string;
+  clienteTelefone: string;
+  veiculo: string;
+  placa: string;
+  problemaRelatado: string;
+  pecas: {
+    id: string;
+    nome: string;
+    quantidade: number;
+    valorUnitario: number;
+    valorTotal: number;
+  }[];
+  servicos: {
+    id: string;
+    descricao: string;
+    valor: number;
+  }[];
+  totalPecas: number;
+  totalServicos: number;
+  totalFinal: number;
+};
+
+type PublicBudgetResponse = {
+  id: string;
+  public_token: string;
+  status: string;
+  os_status: string | null;
+  public_expires_at: string | null;
+  aprovado_em: string | null;
+  cliente?: { nome: string | null; telefone: string | null } | null;
+  veiculo: {
+    marca: string | null;
+    modelo: string | null;
+    ano: string | null;
+    placa: string | null;
+  } | null;
+  ordem_servico: { problema_relatado: string | null } | null;
+  pecas: {
+    id: string;
+    nome: string | null;
+    quantidade: number | null;
+    valor_unitario: number | null;
+    valor_total: number | null;
+  }[];
+  servicos: {
+    id: string;
+    descricao: string | null;
+    valor: number | null;
+  }[];
+  totais: {
+    total_pecas: number | null;
+    total_servicos: number | null;
+    total_final: number | null;
+  };
+};
 
 const CHECKLIST_BUDGET_TERMS: Record<string, string[]> = {
   freio: ["freio", "pastilha", "disco", "fluido"],
@@ -198,6 +263,81 @@ function syncLinkedCotacoesApproval(
     });
 }
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
+
+async function fetchPublicBudget(id: string): Promise<PublicBudget | null> {
+  if (!supabase || !isUuid(id)) {
+    return null;
+  }
+
+  const { data, error } = await supabase.rpc("public_get_orcamento", {
+    p_public_token: id,
+  });
+
+  if (error) {
+    console.error("Erro ao buscar orçamento público por token:", error);
+    throw error;
+  }
+
+  const budget = data as PublicBudgetResponse | null;
+
+  if (!budget) {
+    return null;
+  }
+
+  const parts = (budget.pecas ?? []).map((part) => {
+    const quantidade = Number(part.quantidade ?? 0);
+    const valorUnitario = Number(part.valor_unitario ?? 0);
+
+    return {
+      id: part.id,
+      nome: part.nome || "Peça sem descrição",
+      quantidade,
+      valorUnitario,
+      valorTotal: Number(part.valor_total ?? quantidade * valorUnitario),
+    };
+  });
+
+  const services = (budget.servicos ?? []).map((service) => ({
+    id: service.id,
+    descricao: service.descricao || "Serviço sem descrição",
+    valor: Number(service.valor ?? 0),
+  }));
+  const totalParts =
+    Number(budget.totais?.total_pecas ?? 0) ||
+    parts.reduce((total, part) => total + part.valorTotal, 0);
+  const totalServices =
+    Number(budget.totais?.total_servicos ?? 0) ||
+    services.reduce((total, service) => total + service.valor, 0);
+  const vehicleParts = [
+    budget.veiculo?.marca,
+    budget.veiculo?.modelo,
+    budget.veiculo?.ano,
+  ].filter(Boolean);
+
+  return {
+    id: budget.id,
+    status: budget.status,
+    osStatus: budget.os_status || "",
+    publicExpiresAt: budget.public_expires_at || "",
+    aprovadoEm: budget.aprovado_em || "",
+    cliente: budget.cliente?.nome || "Cliente não informado",
+    clienteTelefone: budget.cliente?.telefone || "",
+    veiculo: vehicleParts.join(" ") || "Veículo não informado",
+    placa: budget.veiculo?.placa || "",
+    problemaRelatado: budget.ordem_servico?.problema_relatado || "",
+    pecas: parts,
+    servicos: services,
+    totalPecas: totalParts,
+    totalServicos: totalServices,
+    totalFinal: Number(budget.totais?.total_final ?? totalParts + totalServices),
+  };
+}
+
 export default function OrcamentoView() {
   const { id } = useParams();
   const [orders, setOrders] = useState<ServiceOrder[]>(() => getStoredOrders());
@@ -210,6 +350,9 @@ export default function OrcamentoView() {
   >("Pix");
   const [selectedInstallments, setSelectedInstallments] = useState(1);
   const [feedback, setFeedback] = useState("");
+  const [publicBudget, setPublicBudget] = useState<PublicBudget | null>(null);
+  const [publicBudgetStatus, setPublicBudgetStatus] =
+    useState<PublicBudgetStatus>("idle");
 
   const order = useMemo(
     () =>
@@ -223,6 +366,43 @@ export default function OrcamentoView() {
     () => (order ? getApprovalItems(order) : []),
     [order],
   );
+
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    let isMounted = true;
+    const budgetId = id;
+
+    async function loadPublicBudget() {
+      setPublicBudgetStatus("loading");
+
+      try {
+        const budget = await fetchPublicBudget(budgetId);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setPublicBudget(budget);
+        setPublicBudgetStatus(budget ? "ready" : "not_found");
+      } catch (error) {
+        console.error("Erro ao carregar orçamento público:", error);
+
+        if (isMounted) {
+          setPublicBudget(null);
+          setPublicBudgetStatus("error");
+        }
+      }
+    }
+
+    void loadPublicBudget();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [id]);
   const hasDecision = Boolean(
     order && order.statusAprovacao !== "pendente",
   );
@@ -513,6 +693,61 @@ export default function OrcamentoView() {
     setFeedback("Solicitação de revisão enviada com sucesso.");
   }
 
+  async function handleApprovePublicBudget() {
+    if (!publicBudget || !id || isSubmittingDecision) {
+      return;
+    }
+
+    if (publicBudget.status !== "RASCUNHO") {
+      setFeedback("Este orçamento não está mais disponível para aprovação.");
+      return;
+    }
+
+    if (!supabase) {
+      setFeedback("Conexão com Supabase não configurada.");
+      return;
+    }
+
+    setIsSubmittingDecision(true);
+    setFeedback("");
+
+    const { data, error } = await supabase.rpc("public_approve_orcamento", {
+      p_public_token: id,
+      p_aprovado_ip: null,
+    });
+
+    setIsSubmittingDecision(false);
+
+    if (error) {
+      console.error("Erro ao aprovar orçamento público:", error);
+      setFeedback(
+        "Não foi possível aprovar o orçamento. Tente novamente ou fale com a oficina.",
+      );
+      return;
+    }
+
+    const approvalResult = data as {
+      success?: boolean;
+      message?: string;
+      os_status?: string;
+    } | null;
+
+    if (!approvalResult?.success) {
+      setFeedback(
+        approvalResult?.message ||
+          "Este orçamento está expirado, indisponível ou já foi aprovado.",
+      );
+      return;
+    }
+
+    setPublicBudget({
+      ...publicBudget,
+      status: "APROVADO",
+      osStatus: approvalResult.os_status || "APROVADA",
+    });
+    setFeedback("Orçamento aprovado com sucesso");
+  }
+
   function getWhatsAppPhone(value: string) {
     const digits = onlyDigits(value);
 
@@ -529,6 +764,219 @@ export default function OrcamentoView() {
     }
 
     return digits;
+  }
+
+  if (publicBudgetStatus === "loading" && !order) {
+    return (
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-3xl items-center">
+        <section className="w-full rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="text-3xl font-bold">Carregando orçamento</h2>
+          <p className="mt-2 text-slate-400">
+            Buscando os dados enviados pela oficina.
+          </p>
+        </section>
+      </div>
+    );
+  }
+
+  if (publicBudget) {
+    const canApprovePublicBudget = publicBudget.status === "RASCUNHO";
+    const publicStatusLabel =
+      publicBudget.status === "APROVADO" ? "Aprovado" : "Rascunho";
+
+    return (
+      <div className="mx-auto max-w-5xl space-y-6 pb-8">
+        <BackButton />
+
+        <header className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-sm shadow-slate-950/20">
+          <div className="grid gap-6 p-6 lg:grid-cols-[1fr_280px] lg:p-8">
+            <div>
+              <span className="text-sm font-semibold uppercase text-sky-400">
+                Orçamento {publicBudget.id}
+              </span>
+              <h1 className="mt-2 text-4xl font-bold tracking-normal text-white">
+                Seu orçamento está pronto
+              </h1>
+              <div className="mt-4 inline-flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-100">
+                <span>Total: {formatCurrency(publicBudget.totalFinal)}</span>
+                <span className="text-emerald-300/60">|</span>
+                <span>
+                  {publicBudget.servicos.length}{" "}
+                  {publicBudget.servicos.length === 1 ? "serviço" : "serviços"}
+                </span>
+                <span className="text-emerald-300/60">|</span>
+                <span>
+                  {publicBudget.pecas.length}{" "}
+                  {publicBudget.pecas.length === 1 ? "peça" : "peças"}
+                </span>
+              </div>
+              <p className="mt-3 max-w-2xl text-base text-slate-300">
+                Olá, {publicBudget.cliente}. Revise os itens recomendados para o
+                seu {publicBudget.veiculo} antes de aprovar.
+              </p>
+
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                  <span className="text-xs uppercase text-slate-500">
+                    Cliente
+                  </span>
+                  <p className="mt-1 font-semibold text-slate-100">
+                    {publicBudget.cliente}
+                  </p>
+                  <p className="text-sm text-slate-400">
+                    {formatPhone(publicBudget.clienteTelefone)}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                  <span className="text-xs uppercase text-slate-500">
+                    Veículo
+                  </span>
+                  <p className="mt-1 font-semibold text-slate-100">
+                    {publicBudget.veiculo}
+                  </p>
+                  <p className="text-sm text-slate-400">
+                    Placa {publicBudget.placa || "-"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <aside className="rounded-xl border border-sky-400/20 bg-sky-500/10 p-5">
+              <span className="text-xs uppercase text-sky-200">Status</span>
+              <p className="mt-2 text-xl font-bold text-white">
+                {publicStatusLabel}
+              </p>
+              <p className="mt-3 text-sm text-slate-300">
+                Este link permite apenas visualizar e aprovar o orçamento.
+              </p>
+              {publicBudget.osStatus === "APROVADA" && (
+                <p className="mt-3 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100">
+                  OS aprovada
+                </p>
+              )}
+            </aside>
+          </div>
+        </header>
+
+        {feedback && (
+          <section className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-5">
+            <p className="font-semibold text-emerald-100">{feedback}</p>
+          </section>
+        )}
+
+        {publicBudget.problemaRelatado && (
+          <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+            <h2 className="text-xl font-bold text-sky-300">Serviço inicial</h2>
+            <p className="mt-3 whitespace-pre-wrap text-slate-200">
+              {publicBudget.problemaRelatado}
+            </p>
+          </section>
+        )}
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="text-xl font-bold text-sky-300">Peças</h2>
+          <div className="mt-5 grid gap-3">
+            {publicBudget.pecas.length ? (
+              publicBudget.pecas.map((part) => (
+                <div
+                  key={part.id}
+                  className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-semibold text-slate-100">
+                        {part.nome}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-400">
+                        {part.quantidade} x {formatCurrency(part.valorUnitario)}
+                      </p>
+                    </div>
+                    <strong className="text-sm text-slate-100">
+                      {formatCurrency(part.valorTotal)}
+                    </strong>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+                Nenhuma peça informada neste orçamento.
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <h2 className="text-xl font-bold text-sky-300">Serviços</h2>
+          <div className="mt-5 grid gap-3">
+            {publicBudget.servicos.length ? (
+              publicBudget.servicos.map((service) => (
+                <div
+                  key={service.id}
+                  className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <p className="font-semibold text-slate-100">
+                      {service.descricao}
+                    </p>
+                    <strong className="text-sm text-slate-100">
+                      {formatCurrency(service.valor)}
+                    </strong>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+                Nenhum serviço informado neste orçamento.
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-sky-400/20 bg-slate-900 p-6">
+          <div className="grid gap-6 lg:grid-cols-[1fr_320px] lg:items-center">
+            <div className="grid gap-3">
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-slate-400">Total de peças</span>
+                <strong>{formatCurrency(publicBudget.totalPecas)}</strong>
+              </div>
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-slate-400">Total de serviços</span>
+                <strong>{formatCurrency(publicBudget.totalServicos)}</strong>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-sky-400/30 bg-sky-500/10 p-5 text-center">
+              <span className="text-sm font-medium text-sky-100">
+                Total geral
+              </span>
+              <strong className="mt-2 block text-4xl font-bold text-white">
+                {formatCurrency(publicBudget.totalFinal)}
+              </strong>
+            </div>
+          </div>
+        </section>
+
+        <section className="sticky bottom-0 -mx-4 border-t border-slate-800 bg-slate-950/95 px-4 py-4 backdrop-blur sm:mx-0 sm:rounded-2xl sm:border sm:px-5">
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center">
+            <button
+              type="button"
+              onClick={handleApprovePublicBudget}
+              disabled={!canApprovePublicBudget || isSubmittingDecision}
+              className="rounded-2xl bg-emerald-500 px-8 py-4 text-base font-bold text-white shadow-lg shadow-emerald-950/40 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-[260px]"
+            >
+              {isSubmittingDecision ? "Processando..." : "Aprovar orçamento"}
+            </button>
+          </div>
+          {!canApprovePublicBudget && (
+            <p className="mt-3 text-center text-sm text-slate-400">
+              Este orçamento não está mais em rascunho e não pode ser alterado por
+              este link.
+            </p>
+          )}
+        </section>
+      </div>
+    );
   }
 
   if (!order) {

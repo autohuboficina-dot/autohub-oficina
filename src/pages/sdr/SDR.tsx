@@ -40,12 +40,12 @@ function openWhatsApp(phone: string, message: string) {
   return true;
 }
 
-function createBudgetLink(orderId: string) {
+function createBudgetLink(publicToken: string) {
   if (typeof window === "undefined") {
-    return `/orcamento/${orderId}`;
+    return `/orcamento/${publicToken}`;
   }
 
-  return `${window.location.origin}/orcamento/${orderId}`;
+  return `${window.location.origin}/orcamento/${publicToken}`;
 }
 
 function formatDate(value: string) {
@@ -125,7 +125,7 @@ export default function SDR() {
   }
 
   function sendBudgetReminder(order: ServiceOrder) {
-    const link = createBudgetLink(order.id);
+    const link = createBudgetLink(order.orcamento.publicToken || order.id);
     handleWhatsApp(
       order.clienteTelefone || order.telefone,
       `Olá, ${order.cliente}. Aqui é da ${oficinaConfig.nomeOficina}. Seu orçamento da OS ${order.id} ainda está aguardando aprovação. Você pode visualizar e responder por aqui: ${link}`,

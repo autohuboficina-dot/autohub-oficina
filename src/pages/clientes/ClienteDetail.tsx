@@ -1,13 +1,18 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone } from "../../utils/formatters";
 import {
   getServiceOrderStatusBadgeClass,
   getServiceOrderStatusLabel,
   getStoredOrders,
 } from "../../services/osService";
-import { getClientes } from "../../services/clientesService";
+import {
+  getClienteByIdSupabase,
+  getClientes,
+  type Cliente,
+} from "../../services/clientesService";
 
 function formatCurrency(value: number) {
   return value.toLocaleString("pt-BR", {
@@ -27,12 +32,41 @@ function formatDate(value: string) {
 export default function ClienteDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const clientes = useMemo(() => getClientes(), []);
-  const ordens = useMemo(() => getStoredOrders(), []);
-  const cliente = useMemo(
-    () => clientes.find((currentCliente) => currentCliente.id === id),
-    [clientes, id],
+  const { oficina_id } = useAuth();
+  const [cliente, setCliente] = useState<Cliente | undefined>(() =>
+    id ? getClientes().find((currentCliente) => currentCliente.id === id) : undefined,
   );
+  const [clienteError, setClienteError] = useState("");
+  const ordens = useMemo(() => getStoredOrders(), []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCliente() {
+      if (!id) {
+        setCliente(undefined);
+        return;
+      }
+
+      if (!oficina_id) {
+        setClienteError("Não foi possível identificar a oficina do usuário logado.");
+        setCliente(getClientes().find((currentCliente) => currentCliente.id === id));
+        return;
+      }
+
+      const loadedCliente = await getClienteByIdSupabase(oficina_id, id);
+
+      if (isMounted) {
+        setCliente(loadedCliente);
+      }
+    }
+
+    loadCliente();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [id, oficina_id]);
   const historicoOs = useMemo(() => {
     return ordens
       .filter((os) => os.clienteId === id)
@@ -111,6 +145,12 @@ export default function ClienteDetail() {
       </section>
 
       <section className={`${sectionClass} mb-6`}>
+        {clienteError && (
+          <div className="mb-5 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200">
+            {clienteError}
+          </div>
+        )}
+
         <h3 className="mb-5 text-xl font-semibold">Dados do cliente</h3>
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

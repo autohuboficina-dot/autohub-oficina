@@ -179,6 +179,7 @@ export type ServiceOrder = {
   cotacaoPrecoFinalPeca?: number;
   cotacaoIdEscolhida?: string;
   orcamento: {
+    publicToken?: string;
     totalPecas: number;
     totalMaoDeObra: number;
     descontoValor: number;

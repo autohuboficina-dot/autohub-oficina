@@ -212,6 +212,26 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
+            path="/orcamento/:id"
+            element={
+              <div className="min-h-screen bg-slate-950 text-slate-100">
+                <main className="px-4 py-6 sm:px-6 lg:px-8">
+                  <OrcamentoView />
+                </main>
+              </div>
+            }
+          />
+          <Route
+            path="/fornecedor/cotacao/:id"
+            element={
+              <div className="min-h-screen bg-slate-950 text-slate-100">
+                <main className="px-4 py-6 sm:px-6 lg:px-8">
+                  <FornecedorCotacaoView />
+                </main>
+              </div>
+            }
+          />
+          <Route
             path="/*"
             element={
               <ProtectedRoute>

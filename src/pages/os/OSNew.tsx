@@ -1,8 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
-import { getClientes, type Cliente } from "../../services/clientesService";
+import {
+  getClientes,
+  getClientesSupabase,
+  type Cliente,
+} from "../../services/clientesService";
 import {
   calculatePaymentSimulation,
   getConfiguracoesOficina,
@@ -11,7 +16,9 @@ import {
   createServiceOrderTimelineEvent,
   createServiceOrderId,
   createNextOrderCode,
+  createServiceOrderSupabase,
   getStoredOrders,
+  getStoredOrdersSupabase,
   saveStoredOrders,
   type ChecklistStatus,
   type ServiceOrder,
@@ -65,7 +72,8 @@ function toNumber(value: string) {
 export default function OSNew() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [clientes] = useState<Cliente[]>(() => getClientes());
+  const { oficina_id } = useAuth();
+  const [clientes, setClientes] = useState<Cliente[]>(() => getClientes());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [selectedClienteId, setSelectedClienteId] = useState(() => {
     const clienteId = searchParams.get("clienteId") || "";
@@ -98,8 +106,29 @@ export default function OSNew() {
   const [depositPercent, setDepositPercent] = useState("");
   const [photos, setPhotos] = useState<ServiceOrderPhoto[]>([]);
   const [savedOrderId, setSavedOrderId] = useState("");
+  const [savedBudgetToken, setSavedBudgetToken] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [formError, setFormError] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadClientes() {
+      const loadedClientes = oficina_id
+        ? await getClientesSupabase(oficina_id)
+        : getClientes();
+
+      if (isMounted) {
+        setClientes(loadedClientes);
+      }
+    }
+
+    loadClientes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [oficina_id]);
 
   const selectedCliente = useMemo(
     () => clientes.find((cliente) => cliente.id === selectedClienteId),
@@ -288,16 +317,21 @@ export default function OSNew() {
     setPartLines((lines) => lines.filter((line) => line.id !== lineId));
   }
 
-  function createBudgetLink(orderId: string) {
+  function createBudgetLink(publicToken: string) {
     if (typeof window === "undefined") {
-      return `/orcamento/${orderId}`;
+      return `/orcamento/${publicToken}`;
     }
 
-    return `${window.location.origin}/orcamento/${orderId}`;
+    return `${window.location.origin}/orcamento/${publicToken}`;
   }
 
-  function handleSaveOrder() {
+  async function handleSaveOrder() {
     setFormError("");
+
+    if (!oficina_id) {
+      setFormError("Não foi possível identificar a oficina do usuário logado.");
+      return;
+    }
 
     if (!selectedCliente) {
       setFormError("Selecione um cliente antes de salvar a OS.");
@@ -309,7 +343,7 @@ export default function OSNew() {
       return;
     }
 
-    const currentOrders = getStoredOrders();
+    const currentOrders = await getStoredOrdersSupabase(oficina_id);
     const nextOrderCode = createNextOrderCode(currentOrders);
     const now = new Date().toISOString();
     const vehicleDescription = [
@@ -444,9 +478,14 @@ export default function OSNew() {
     };
 
     try {
-      saveStoredOrders([...currentOrders, newOrder]);
-      setSavedOrderId(newOrder.codigo);
-      setSaveMessage(`OS ${newOrder.codigo} salva com sucesso.`);
+      const savedOrder = await createServiceOrderSupabase(oficina_id, newOrder);
+      saveStoredOrders([
+        ...getStoredOrders().filter((order) => order.id !== savedOrder.id),
+        savedOrder,
+      ]);
+      setSavedOrderId(savedOrder.codigo);
+      setSavedBudgetToken(savedOrder.orcamento.publicToken || "");
+      setSaveMessage(`OS ${savedOrder.codigo} salva com sucesso.`);
     } catch (error) {
       setFormError(
         error instanceof Error
@@ -1094,9 +1133,18 @@ export default function OSNew() {
 
               <button
                 type="button"
-                onClick={() =>
-                  window.open(createBudgetLink(savedOrderId), "_blank", "noopener,noreferrer")
-                }
+                onClick={() => {
+                  if (savedBudgetToken) {
+                    window.open(
+                      createBudgetLink(savedBudgetToken),
+                      "_blank",
+                      "noopener,noreferrer",
+                    );
+                    return;
+                  }
+
+                  navigate(`/os/${savedOrderId}`);
+                }}
                 className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
               >
                 Enviar orçamento
