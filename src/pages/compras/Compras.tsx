@@ -8,8 +8,8 @@ import {
   getCotacoesSupabase,
   saveCotacao,
   saveCotacaoSupabase,
+  selectCotacaoFornecedorSupabase,
   updateCotacao,
-  updateCotacaoSupabase,
   type CotacaoFornecedorResponse,
   type CotacaoPecaEscolha,
   type CotacaoPecaItem,
@@ -22,6 +22,7 @@ import {
   type Fornecedor,
 } from "../../services/fornecedoresService";
 import {
+  getServiceOrderSupabase,
   getStoredOrders,
   saveStoredOrders,
   updateServiceOrderStatusWithTimeline,
@@ -29,20 +30,6 @@ import {
 } from "../../services/osService";
 import { addItemEstoque } from "../../services/estoqueService";
 import { getConfiguracoesOficina } from "../../services/configuracoesService";
-
-type ResponseFormState = {
-  fornecedorId: string;
-  preco: string;
-  marca: string;
-  observacao: string;
-};
-
-const initialResponseForm: ResponseFormState = {
-  fornecedorId: "",
-  preco: "",
-  marca: "",
-  observacao: "",
-};
 
 function getWhatsAppPhone(value: string) {
   const digits = onlyDigits(value);
@@ -252,7 +239,7 @@ function getCotacaoStatusAfterChoice(
   ).length;
 
   if (selectedCount >= cotacao.pecas.length && cotacao.pecas.length > 0) {
-    return "Cotação concluída";
+    return "Fornecedor escolhido";
   }
 
   if (selectedCount > 0) {
@@ -271,22 +258,13 @@ export default function Compras() {
   const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [orders] = useState<ServiceOrder[]>(() => getStoredOrders());
-  const linkedOrder = useMemo(
+  const [linkedOrderFromSupabase, setLinkedOrderFromSupabase] =
+    useState<ServiceOrder>();
+  const localLinkedOrder = useMemo(
     () => orders.find((order) => order.id === osId || order.codigo === osId),
     [orders, osId],
   );
-  const linkedOrderVehicle = useMemo(
-    () => getOrderVehicle(linkedOrder),
-    [linkedOrder],
-  );
-  const linkedOrderPhotos = useMemo(
-    () => getOrderPhotos(linkedOrder),
-    [linkedOrder],
-  );
-  const linkedOrderParts = useMemo(
-    () => getOrderParts(linkedOrder),
-    [linkedOrder],
-  );
+  const linkedOrder = linkedOrderFromSupabase ?? localLinkedOrder;
   const initialPiece =
     linkedOrder?.pecasNecessarias.find((part) => part.peca.trim())?.peca || "";
   const initialObservation = linkedOrder
@@ -305,9 +283,6 @@ export default function Compras() {
   const [urgencia, setUrgencia] = useState<"Normal" | "Urgente">("Normal");
   const [observacoes, setObservacoes] = useState(initialObservation);
   const [feedback, setFeedback] = useState("");
-  const [activeResponseCotacaoId, setActiveResponseCotacaoId] = useState("");
-  const [responseForm, setResponseForm] =
-    useState<ResponseFormState>(initialResponseForm);
 
   const selectedFornecedor = useMemo(
     () =>
@@ -320,6 +295,19 @@ export default function Compras() {
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
   const labelClass = "mb-2 block text-sm font-medium text-slate-300";
+
+  const linkedOrderVehicle = useMemo(
+    () => getOrderVehicle(linkedOrder),
+    [linkedOrder],
+  );
+  const linkedOrderPhotos = useMemo(
+    () => getOrderPhotos(linkedOrder),
+    [linkedOrder],
+  );
+  const linkedOrderParts = useMemo(
+    () => getOrderParts(linkedOrder),
+    [linkedOrder],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -343,6 +331,28 @@ export default function Compras() {
     };
   }, [oficina_id]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadLinkedOrder() {
+      if (!oficina_id || !osId) {
+        return;
+      }
+
+      const loadedOrder = await getServiceOrderSupabase(oficina_id, osId);
+
+      if (isMounted && loadedOrder) {
+        setLinkedOrderFromSupabase(loadedOrder);
+      }
+    }
+
+    void loadLinkedOrder();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [oficina_id, osId]);
+
   async function handleQuoteSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -351,17 +361,24 @@ export default function Compras() {
       return;
     }
 
-    if (!item.trim()) {
-      setFeedback("Informe o item para solicitar cotação.");
-      return;
-    }
-
     if (!getWhatsAppPhone(selectedFornecedor.whatsapp)) {
       setFeedback("O fornecedor selecionado não possui WhatsApp válido.");
       return;
     }
 
-    const quoteItems = linkedOrderParts.length
+    if (linkedOrder && linkedOrderParts.length === 0) {
+      setFeedback(
+        "Esta OS não possui peças salvas para cotação. Adicione e salve as peças antes de solicitar.",
+      );
+      return;
+    }
+
+    if (!linkedOrder && !item.trim()) {
+      setFeedback("Informe o item para solicitar cotação.");
+      return;
+    }
+
+    const quoteItems = linkedOrder
       ? linkedOrderParts
       : [
           {
@@ -372,6 +389,16 @@ export default function Compras() {
           },
         ];
     const mainQuoteItem = quoteItems[0];
+    const cotacaoObservacao = linkedOrder
+      ? [
+          observacoes.trim(),
+          `OS ${linkedOrder.codigo || linkedOrder.id}`,
+          linkedOrder.problemaRelatado || linkedOrder.servicoInicial,
+          linkedOrder.diagnostico.solucaoRecomendada,
+        ]
+          .filter(Boolean)
+          .join(" - ")
+      : observacoes.trim();
     const cotacaoPayload = {
       osId: linkedOrder?.id || "",
       oficinaNome: oficinaConfig.nomeOficina,
@@ -382,7 +409,7 @@ export default function Compras() {
       quantidade: mainQuoteItem.quantidade,
       pecas: quoteItems,
       urgencia,
-      observacao: observacoes.trim(),
+      observacao: cotacaoObservacao,
       fotos: linkedOrderPhotos,
       clienteNome: linkedOrder?.clienteDados.nome || linkedOrder?.cliente || "",
       clienteTelefone:
@@ -462,103 +489,17 @@ export default function Compras() {
     setFeedback(`Cotação enviada para ${selectedFornecedor.nome}.`);
   }
 
-  function handleOpenResponseForm(cotacao: CotacaoPeca) {
-    setActiveResponseCotacaoId((currentId) =>
-      currentId === cotacao.id ? "" : cotacao.id,
-    );
-    setResponseForm({
-      ...initialResponseForm,
-      fornecedorId: cotacao.fornecedorId,
-    });
-    setFeedback("");
-  }
-
-  function handleAddResponse(cotacao: CotacaoPeca) {
-    const fornecedor = fornecedores.find(
-      (currentFornecedor) => currentFornecedor.id === responseForm.fornecedorId,
-    );
-    const preco = Number(responseForm.preco || 0);
-
-    if (!fornecedor) {
-      setFeedback("Selecione o fornecedor que respondeu a cotação.");
-      return;
-    }
-
-    if (!preco || preco <= 0) {
-      setFeedback("Informe um preço válido para a resposta.");
-      return;
-    }
-
-    const nextCotacao = {
-      ...cotacao,
-      status:
-        cotacao.status === "Cotação enviada"
-          ? "Resposta recebida"
-          : cotacao.status,
-      responses: [
-        ...cotacao.responses,
-        {
-          cotacaoId: cotacao.id,
-          fornecedorId: fornecedor.id,
-          fornecedorNome: fornecedor.nome,
-          preco,
-          prazo: "",
-          marca: responseForm.marca.trim(),
-          observacao: responseForm.observacao.trim(),
-          dataResposta: new Date().toISOString(),
-          itemResponses: [
-            {
-              pecaId: cotacao.pecas[0]?.id || "peca-1",
-              nomePeca: cotacao.pecas[0]?.peca || cotacao.peca,
-              quantidade: cotacao.pecas[0]?.quantidade || cotacao.quantidade,
-              preco,
-              marca: responseForm.marca.trim(),
-              observacaoFornecedor: responseForm.observacao.trim(),
-              dataHora: new Date().toISOString(),
-            },
-          ],
-        },
-      ],
-    };
-    const updatedCotacao = updateCotacao(nextCotacao);
-
-    void updateCotacaoSupabase(nextCotacao).catch((error) => {
-      setFeedback(
-        error instanceof Error
-          ? error.message
-          : "Não foi possível salvar a resposta no Supabase.",
-      );
-    });
-
-    setCotacoes((currentCotacoes) =>
-      currentCotacoes.map((currentCotacao) =>
-        currentCotacao.id === cotacao.id ? updatedCotacao : currentCotacao,
-      ),
-    );
-    if (cotacao.osId) {
-      const updatedOrders = getStoredOrders().map((order) =>
-        order.id === cotacao.osId || order.codigo === cotacao.osId
-          ? updateServiceOrderStatusWithTimeline(order, "COTACAO_RECEBIDA", {
-              tipo: "resposta_fornecedor",
-              titulo: "Resposta de fornecedor recebida",
-              descricao: `${fornecedor.nome} respondeu a cotação ${cotacao.id}.`,
-              usuarioResponsavel: "Compras",
-            })
-          : order,
-      );
-      saveStoredOrders(updatedOrders);
-    }
-    setResponseForm(initialResponseForm);
-    setActiveResponseCotacaoId("");
-    setFeedback("Resposta do fornecedor adicionada.");
-  }
-
-  function handleChooseSupplier(
+  async function handleChooseSupplier(
     cotacao: CotacaoPeca,
     cotacaoPart: CotacaoPecaItem,
     response: CotacaoFornecedorResponse,
     itemResponse: CotacaoPecaRespostaItem,
   ) {
+    if (getChoiceForPart(cotacao, cotacaoPart.id)) {
+      setFeedback("Esta peça já tem fornecedor escolhido e não pode ser alterada.");
+      return;
+    }
+
     const hasLinkedOrder = Boolean(cotacao.osId);
     const dataEscolha = new Date().toISOString();
     const nextChoice: CotacaoPecaEscolha = {
@@ -595,15 +536,21 @@ export default function Compras() {
       prazoSelecionado: "",
       pecasEscolhidas: nextChoices,
     };
-    const updatedCotacao = updateCotacao(nextCotacao);
+    let updatedCotacao: CotacaoPeca;
 
-    void updateCotacaoSupabase(nextCotacao).catch((error) => {
+    try {
+      updatedCotacao = await selectCotacaoFornecedorSupabase(
+        nextCotacao,
+        nextChoice,
+      );
+    } catch (error) {
       setFeedback(
         error instanceof Error
           ? error.message
           : "Não foi possível salvar a escolha no Supabase.",
       );
-    });
+      return;
+    }
 
     if (hasLinkedOrder) {
       const updatedOrders = getStoredOrders().map((order) =>
@@ -634,11 +581,7 @@ export default function Compras() {
         currentCotacao.id === cotacao.id ? updatedCotacao : currentCotacao,
       ),
     );
-    setFeedback(
-      cotacao.osId
-        ? `Fornecedor escolhido para ${cotacaoPart.peca} e orçamento da OS ${cotacao.osId} atualizado.`
-        : `Fornecedor escolhido para ${cotacaoPart.peca}: ${response.fornecedorNome}.`,
-    );
+    setFeedback("Fornecedor selecionado com sucesso.");
   }
 
   function handleConfirmPurchase(cotacao: CotacaoPeca) {
@@ -745,6 +688,10 @@ export default function Compras() {
           <p className="mt-2 text-slate-400">
             Solicite, compare e confirme cotações de peças vinculadas às OS.
           </p>
+          <p className="mt-2 rounded-lg border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-sm text-sky-100">
+            As compras vinculadas à OS podem ser resolvidas diretamente na tela
+            da OS. Esta tela serve para acompanhamento geral.
+          </p>
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
@@ -824,8 +771,8 @@ export default function Compras() {
                 </div>
               ) : (
                 <div className="mt-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-                  Esta OS ainda não possui peças cadastradas. Informe a peça
-                  manualmente antes de enviar a cotação.
+                  Esta OS ainda não possui peças cadastradas. Adicione e salve
+                  as peças na OS antes de enviar a cotação.
                 </div>
               )}
             </div>
@@ -937,44 +884,83 @@ export default function Compras() {
             </div>
           )}
 
-          <div className="grid gap-5 md:grid-cols-[1fr_160px_180px]">
-            <div>
-              <label className={labelClass}>Item / peça</label>
-              <input
-                className={inputClass}
-                placeholder="Pastilha de freio, filtro, pneu..."
-                value={item}
-                onChange={(event) => setItem(event.target.value)}
-              />
+          {linkedOrder ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-100">
+                    Peças da OS para cotação
+                  </p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    A cotação será criada com as peças salvas na OS.
+                  </p>
+                </div>
+                <span className="rounded-full bg-sky-500/15 px-3 py-1 text-xs font-semibold text-sky-200 ring-1 ring-sky-400/30">
+                  {linkedOrderParts.length} peça(s)
+                </span>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {linkedOrderParts.length ? (
+                  linkedOrderParts.map((part) => (
+                    <div
+                      key={part.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+                    >
+                      <span className="font-medium text-slate-100">
+                        {part.peca}
+                      </span>
+                      <span className="text-slate-400">
+                        Quantidade: {part.quantidade}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                    Nenhuma peça salva nesta OS para cotação.
+                  </p>
+                )}
+              </div>
             </div>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-[1fr_160px_180px]">
+              <div>
+                <label className={labelClass}>Item / peça</label>
+                <input
+                  className={inputClass}
+                  placeholder="Pastilha de freio, filtro, pneu..."
+                  value={item}
+                  onChange={(event) => setItem(event.target.value)}
+                />
+              </div>
 
-            <div>
-              <label className={labelClass}>Quantidade</label>
-              <input
-                className={inputClass}
-                min="1"
-                type="number"
-                value={quantidade}
-                onChange={(event) => setQuantidade(event.target.value)}
-              />
-            </div>
+              <div>
+                <label className={labelClass}>Quantidade</label>
+                <input
+                  className={inputClass}
+                  min="1"
+                  type="number"
+                  value={quantidade}
+                  onChange={(event) => setQuantidade(event.target.value)}
+                />
+              </div>
 
-            <div>
-              <label className={labelClass}>Urgência</label>
-              <select
-                className={inputClass}
-                value={urgencia}
-                onChange={(event) =>
-                  setUrgencia(
-                    event.target.value === "Urgente" ? "Urgente" : "Normal",
-                  )
-                }
-              >
-                <option>Normal</option>
-                <option>Urgente</option>
-              </select>
+              <div>
+                <label className={labelClass}>Urgência</label>
+                <select
+                  className={inputClass}
+                  value={urgencia}
+                  onChange={(event) =>
+                    setUrgencia(
+                      event.target.value === "Urgente" ? "Urgente" : "Normal",
+                    )
+                  }
+                >
+                  <option>Normal</option>
+                  <option>Urgente</option>
+                </select>
+              </div>
             </div>
-          </div>
+          )}
 
           <div>
             <label className={labelClass}>Observações</label>
@@ -1077,6 +1063,9 @@ export default function Compras() {
 
                   {selectedChoices.length > 0 && (
                     <div className="mt-4 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                      <p className="mb-3 text-xs font-semibold uppercase text-emerald-200/80">
+                        Fornecedor escolhido
+                      </p>
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="font-semibold">
                           {selectedChoices.length} de {cotacao.pecas.length}{" "}
@@ -1106,15 +1095,8 @@ export default function Compras() {
                     </div>
                   )}
 
-                  <div className="mt-4 flex flex-wrap justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenResponseForm(cotacao)}
-                      className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-                    >
-                      Adicionar resposta do fornecedor
-                    </button>
-                    {canConfirm && (
+                  {canConfirm && (
+                    <div className="mt-4 flex flex-wrap justify-end gap-2">
                       <button
                         type="button"
                         onClick={() => handleConfirmPurchase(cotacao)}
@@ -1122,100 +1104,29 @@ export default function Compras() {
                       >
                         Confirmar compra com fornecedor
                       </button>
-                    )}
-                  </div>
-
-                  {activeResponseCotacaoId === cotacao.id && (
-                    <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900 p-4">
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div>
-                          <label className={labelClass}>Fornecedor</label>
-                          <select
-                            className={inputClass}
-                            value={responseForm.fornecedorId}
-                            onChange={(event) =>
-                              setResponseForm((currentState) => ({
-                                ...currentState,
-                                fornecedorId: event.target.value,
-                              }))
-                            }
-                          >
-                            <option value="">Selecione</option>
-                            {fornecedores.map((fornecedor) => (
-                              <option key={fornecedor.id} value={fornecedor.id}>
-                                {fornecedor.nome}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className={labelClass}>Preço unitário</label>
-                          <input
-                            className={inputClass}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={responseForm.preco}
-                            onChange={(event) =>
-                              setResponseForm((currentState) => ({
-                                ...currentState,
-                                preco: event.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-
-                        <div>
-                          <label className={labelClass}>Marca da peça</label>
-                          <input
-                            className={inputClass}
-                            placeholder="Marca informada pelo fornecedor"
-                            value={responseForm.marca}
-                            onChange={(event) =>
-                              setResponseForm((currentState) => ({
-                                ...currentState,
-                                marca: event.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-
-                        <div className="md:col-span-2">
-                          <label className={labelClass}>Observação</label>
-                          <input
-                            className={inputClass}
-                            placeholder="Condição, frete, disponibilidade..."
-                            value={responseForm.observacao}
-                            onChange={(event) =>
-                              setResponseForm((currentState) => ({
-                                ...currentState,
-                                observacao: event.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div>
-                          <label className={labelClass}>Total da peça</label>
-                          <div className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-3 text-sm font-semibold text-slate-100">
-                            {formatCurrency(
-                              Number(responseForm.preco || 0) * cotacao.quantidade,
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => handleAddResponse(cotacao)}
-                          className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400"
-                        >
-                          Salvar resposta
-                        </button>
-                      </div>
                     </div>
                   )}
+
+                  <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h5 className="font-semibold text-slate-100">
+                          Respostas recebidas
+                        </h5>
+                        <p className="mt-1 text-sm text-slate-400">
+                          As respostas entram pelo link público enviado ao fornecedor.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200">
+                        {cotacao.responses.length} resposta(s)
+                      </span>
+                    </div>
+                    {!cotacao.responses.length && (
+                      <p className="mt-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400">
+                        Aguardando resposta do fornecedor
+                      </p>
+                    )}
+                  </div>
 
                   {cotacao.responses.length > 0 && (
                     <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
@@ -1292,7 +1203,11 @@ export default function Compras() {
                                       return (
                                         <div
                                           key={`${cotacaoPart.id}-${response.fornecedorId}-${itemResponse.dataHora}`}
-                                          className="grid gap-3 rounded-lg border border-slate-800 bg-slate-900 p-3 md:grid-cols-[1.2fr_140px_140px_1fr_1.2fr_auto] md:items-center"
+                                          className={`grid gap-3 rounded-lg border p-3 md:grid-cols-[1.2fr_110px_140px_140px_1fr_1.2fr_auto] md:items-center ${
+                                            isSelected
+                                              ? "border-emerald-400/40 bg-emerald-500/10"
+                                              : "border-slate-800 bg-slate-900"
+                                          }`}
                                         >
                                           <div>
                                             <span className="text-xs uppercase text-slate-500">
@@ -1300,6 +1215,14 @@ export default function Compras() {
                                             </span>
                                             <p className="mt-1 font-medium text-slate-100">
                                               {response.fornecedorNome}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <span className="text-xs uppercase text-slate-500">
+                                              Quantidade
+                                            </span>
+                                            <p className="mt-1 text-sm font-semibold text-slate-100">
+                                              {itemResponse.quantidade}
                                             </p>
                                           </div>
                                           <div>
@@ -1347,7 +1270,7 @@ export default function Compras() {
                                           <button
                                             type="button"
                                             onClick={() =>
-                                              handleChooseSupplier(
+                                              void handleChooseSupplier(
                                                 cotacao,
                                                 cotacaoPart,
                                                 response,
@@ -1355,7 +1278,7 @@ export default function Compras() {
                                               )
                                             }
                                             disabled={
-                                              isSelected ||
+                                              Boolean(selectedChoice) ||
                                               cotacao.status ===
                                                 "Compra confirmada com fornecedor"
                                             }
@@ -1363,7 +1286,7 @@ export default function Compras() {
                                           >
                                             {isSelected
                                               ? "Escolhido"
-                                              : "Escolher fornecedor"}
+                                              : "Escolher este fornecedor"}
                                           </button>
                                         </div>
                                       );

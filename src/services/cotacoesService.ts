@@ -5,6 +5,7 @@ import {
   updateCotacao,
   type CotacaoFornecedorResponse,
   type CotacaoPeca,
+  type CotacaoPecaEscolha,
   type CotacaoPecaItem,
   type CotacaoPecaRespostaItem,
   type CotacaoStatus,
@@ -13,6 +14,7 @@ import {
 type CotacaoStatusDb =
   | "COTACAO_ENVIADA"
   | "RESPOSTA_RECEBIDA"
+  | "SELECIONADA"
   | "FORNECEDOR_ESCOLHIDO"
   | "COTACAO_PARCIAL"
   | "COTACAO_CONCLUIDA"
@@ -65,6 +67,7 @@ type RespostaFornecedorRow = {
   marca: string | null;
   observacao: string | null;
   data_resposta: string;
+  escolhido: boolean;
   fornecedores?: { nome: string | null } | null;
 };
 
@@ -93,7 +96,7 @@ type PublicCotacaoResponse = {
 const STATUS_TO_DB: Record<CotacaoStatus, CotacaoStatusDb> = {
   "Cotação enviada": "COTACAO_ENVIADA",
   "Resposta recebida": "RESPOSTA_RECEBIDA",
-  "Fornecedor escolhido": "FORNECEDOR_ESCOLHIDO",
+  "Fornecedor escolhido": "SELECIONADA",
   "Cotação parcial": "COTACAO_PARCIAL",
   "Cotação concluída": "COTACAO_CONCLUIDA",
   "Aguardando aprovação do cliente": "AGUARDANDO_APROVACAO_CLIENTE",
@@ -106,6 +109,7 @@ const STATUS_TO_DB: Record<CotacaoStatus, CotacaoStatusDb> = {
 const STATUS_FROM_DB: Record<CotacaoStatusDb, CotacaoStatus> = {
   COTACAO_ENVIADA: "Cotação enviada",
   RESPOSTA_RECEBIDA: "Resposta recebida",
+  SELECIONADA: "Fornecedor escolhido",
   FORNECEDOR_ESCOLHIDO: "Fornecedor escolhido",
   COTACAO_PARCIAL: "Cotação parcial",
   COTACAO_CONCLUIDA: "Cotação concluída",
@@ -193,6 +197,33 @@ function buildResponses(
   });
 }
 
+function buildChoicesFromResponses(
+  cotacao: CotacaoPeca,
+  responses: RespostaFornecedorRow[],
+): CotacaoPecaEscolha[] {
+  return responses
+    .filter((response) => response.escolhido)
+    .map((response) => {
+      const item = cotacao.pecas.find(
+        (peca) => peca.id === response.cotacao_item_id,
+      );
+      const quantidade = Number(item?.quantidade || 1);
+
+      return {
+        pecaId: response.cotacao_item_id || item?.id || "peca-1",
+        nomePeca: item?.peca || "Peça não informada",
+        quantidade,
+        fornecedorId: response.fornecedor_id || "",
+        fornecedorNome:
+          response.fornecedores?.nome || cotacao.fornecedorNome || "Fornecedor",
+        preco: Number(response.preco || 0),
+        marca: response.marca || "",
+        observacao: response.observacao || "",
+        dataEscolha: response.data_resposta,
+      };
+    });
+}
+
 function mapCotacaoFromRows(
   row: CotacaoRow,
   items: CotacaoItemRow[],
@@ -241,9 +272,23 @@ function mapCotacaoFromRows(
     enviadaEm: row.enviada_em,
   };
 
+  const choices = buildChoicesFromResponses(cotacao, responses);
+  const totalSelectedValue = choices.reduce(
+    (total, choice) => total + choice.preco * choice.quantidade,
+    0,
+  );
+  const firstChoice = choices[0];
+
   return {
     ...cotacao,
     responses: buildResponses(cotacao, responses),
+    fornecedorEscolhidoId: firstChoice?.fornecedorId || "",
+    fornecedorEscolhidoNome: firstChoice?.fornecedorNome || "",
+    precoFinalPeca: firstChoice?.preco || 0,
+    fornecedorSelecionado: firstChoice?.fornecedorNome || "",
+    valorSelecionado: totalSelectedValue,
+    marcaSelecionada: firstChoice?.marca || "",
+    pecasEscolhidas: choices,
   };
 }
 
@@ -285,9 +330,23 @@ function mapPublicCotacao(data: PublicCotacaoResponse): CotacaoPeca {
     enviadaEm: data.enviada_em,
   };
 
+  const choices = buildChoicesFromResponses(cotacao, data.respostas || []);
+  const totalSelectedValue = choices.reduce(
+    (total, choice) => total + choice.preco * choice.quantidade,
+    0,
+  );
+  const firstChoice = choices[0];
+
   return {
     ...cotacao,
     responses: buildResponses(cotacao, data.respostas || []),
+    fornecedorEscolhidoId: firstChoice?.fornecedorId || "",
+    fornecedorEscolhidoNome: firstChoice?.fornecedorNome || "",
+    precoFinalPeca: firstChoice?.preco || 0,
+    fornecedorSelecionado: firstChoice?.fornecedorNome || "",
+    valorSelecionado: totalSelectedValue,
+    marcaSelecionada: firstChoice?.marca || "",
+    pecasEscolhidas: choices,
   };
 }
 
@@ -327,7 +386,7 @@ export async function getCotacoesSupabase(oficinaId: string) {
     supabase
       .from("respostas_fornecedor")
       .select(
-        "id, cotacao_id, cotacao_item_id, fornecedor_id, preco, marca, observacao, data_resposta, fornecedores(nome)",
+        "id, cotacao_id, cotacao_item_id, fornecedor_id, preco, marca, observacao, data_resposta, escolhido, fornecedores(nome)",
       )
       .in("cotacao_id", cotacaoIds)
       .returns<RespostaFornecedorRow[]>(),
@@ -453,6 +512,11 @@ export async function updateCotacaoSupabase(cotacao: CotacaoPeca) {
         marca: item.marca,
         observacao: item.observacaoFornecedor,
         data_resposta: response.dataResposta,
+        escolhido: cotacao.pecasEscolhidas.some(
+          (choice) =>
+            choice.pecaId === item.pecaId &&
+            choice.fornecedorId === response.fornecedorId,
+        ),
       })),
   );
 
@@ -486,6 +550,149 @@ export async function updateCotacaoSupabase(cotacao: CotacaoPeca) {
   }
 
   return localCotacao;
+}
+
+export async function selectCotacaoFornecedorSupabase(
+  cotacao: CotacaoPeca,
+  choice: CotacaoPecaEscolha,
+) {
+  if (
+    !supabase ||
+    !isUuid(cotacao.id) ||
+    !isUuid(choice.pecaId) ||
+    !isUuid(choice.fornecedorId)
+  ) {
+    return updateCotacao(cotacao);
+  }
+
+  const { data: cotacaoRow, error: cotacaoRowError } = await supabase
+    .from("cotacoes")
+    .select("oficina_id, ordem_servico_id")
+    .eq("id", cotacao.id)
+    .single<{ oficina_id: string; ordem_servico_id: string | null }>();
+
+  if (cotacaoRowError || !cotacaoRow) {
+    console.error(
+      "[Supabase:cotacoes:select:row] Falha ao identificar cotação.",
+      cotacaoRowError,
+    );
+    throw new Error("Não foi possível identificar a cotação no Supabase.");
+  }
+
+  const { error: unselectError } = await supabase
+    .from("respostas_fornecedor")
+    .update({ escolhido: false })
+    .eq("cotacao_id", cotacao.id)
+    .eq("cotacao_item_id", choice.pecaId);
+
+  if (unselectError) {
+    console.error(
+      "[Supabase:cotacoes:select:clear] Falha ao limpar seleção anterior.",
+      unselectError,
+    );
+    throw new Error("Não foi possível atualizar a seleção anterior.");
+  }
+
+  const { data: selectedResponses, error: selectResponseError } = await supabase
+    .from("respostas_fornecedor")
+    .update({ escolhido: true })
+    .eq("cotacao_id", cotacao.id)
+    .eq("cotacao_item_id", choice.pecaId)
+    .eq("fornecedor_id", choice.fornecedorId)
+    .select("id")
+    .returns<{ id: string }[]>();
+
+  if (selectResponseError || !selectedResponses?.length) {
+    console.error(
+      "[Supabase:cotacoes:select:response] Falha ao marcar fornecedor escolhido.",
+      selectResponseError,
+    );
+    throw new Error("Não foi possível marcar o fornecedor escolhido.");
+  }
+
+  const { error: cotacaoUpdateError } = await supabase
+    .from("cotacoes")
+    .update({ status: STATUS_TO_DB[cotacao.status] })
+    .eq("id", cotacao.id);
+
+  if (cotacaoUpdateError) {
+    console.error(
+      "[Supabase:cotacoes:select:status] Falha ao marcar cotação selecionada.",
+      cotacaoUpdateError,
+    );
+    throw new Error("Não foi possível marcar a cotação como selecionada.");
+  }
+
+  if (cotacaoRow.ordem_servico_id) {
+    const partPayload = {
+      oficina_id: cotacaoRow.oficina_id,
+      ordem_servico_id: cotacaoRow.ordem_servico_id,
+      cotacao_item_id: choice.pecaId,
+      nome: choice.nomePeca,
+      quantidade: Number(choice.quantidade || 1),
+      valor_unitario: Number(choice.preco || 0),
+      fornecedor_escolhido: choice.fornecedorNome,
+      marca_escolhida: choice.marca || null,
+      observacao: choice.observacao || null,
+    };
+
+    const { data: existingPartByItem, error: existingPartError } = await supabase
+      .from("os_pecas")
+      .select("id")
+      .eq("oficina_id", cotacaoRow.oficina_id)
+      .eq("ordem_servico_id", cotacaoRow.ordem_servico_id)
+      .eq("cotacao_item_id", choice.pecaId)
+      .maybeSingle<{ id: string }>();
+
+    if (existingPartError) {
+      console.error(
+        "[Supabase:cotacoes:select:part:get] Falha ao localizar peça da OS.",
+        existingPartError,
+      );
+      throw new Error("Não foi possível localizar a peça vinculada à OS.");
+    }
+
+    const { data: existingPartByName, error: existingPartByNameError } =
+      existingPartByItem
+        ? { data: null, error: null }
+        : await supabase
+            .from("os_pecas")
+            .select("id")
+            .eq("oficina_id", cotacaoRow.oficina_id)
+            .eq("ordem_servico_id", cotacaoRow.ordem_servico_id)
+            .eq("nome", choice.nomePeca)
+            .is("cotacao_item_id", null)
+            .limit(1)
+            .maybeSingle<{ id: string }>();
+
+    if (existingPartByNameError) {
+      console.error(
+        "[Supabase:cotacoes:select:part:name] Falha ao localizar peça por nome.",
+        existingPartByNameError,
+      );
+      throw new Error("Não foi possível localizar a peça da OS para atualização.");
+    }
+
+    const existingPart = existingPartByItem ?? existingPartByName;
+
+    const partResult = existingPart
+      ? await supabase
+          .from("os_pecas")
+          .update(partPayload)
+          .eq("oficina_id", cotacaoRow.oficina_id)
+          .eq("id", existingPart.id)
+      : await supabase.from("os_pecas").insert(partPayload);
+
+    if (partResult.error) {
+      console.error(
+        "[Supabase:cotacoes:select:part:save] Falha ao vincular peça escolhida.",
+        partResult.error,
+      );
+      throw new Error("Não foi possível vincular a peça à cotação escolhida.");
+    }
+  }
+
+  return updateCotacao(cotacao);
 }
 
 export async function getPublicCotacaoSupabase(id: string) {
@@ -610,6 +817,7 @@ export const cotacoesService = {
   getCotacoesSupabase,
   saveCotacaoSupabase,
   updateCotacaoSupabase,
+  selectCotacaoFornecedorSupabase,
   getPublicCotacaoSupabase,
   submitPublicCotacaoResponseSupabase,
 };

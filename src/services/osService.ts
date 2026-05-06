@@ -53,6 +53,8 @@ type OsPecaSupabaseRow = {
   valor_unitario: number;
   valor_total: number | null;
   origem_checklist: string | null;
+  fornecedor_escolhido: string | null;
+  marca_escolhida: string | null;
   observacao: string | null;
   created_at: string;
 };
@@ -314,6 +316,10 @@ function mapPecaFromSupabase(
     valorTotal: Number(row.valor_total ?? quantidade * valorUnitario),
     cotacaoPecaId: row.cotacao_item_id ?? undefined,
     origemChecklist: row.origem_checklist ?? undefined,
+    cotacaoFornecedorEscolhido: row.fornecedor_escolhido ?? undefined,
+    cotacaoPrecoEscolhido: valorUnitario,
+    cotacaoMarcaEscolhida: row.marca_escolhida ?? undefined,
+    cotacaoObservacaoEscolhida: row.observacao ?? undefined,
   };
 }
 
@@ -436,7 +442,7 @@ async function fetchServiceOrderItemsSupabase(
     client
       .from("os_pecas")
       .select(
-        "id, cotacao_item_id, nome, quantidade, valor_unitario, valor_total, origem_checklist, observacao, created_at",
+        "id, cotacao_item_id, nome, quantidade, valor_unitario, valor_total, origem_checklist, fornecedor_escolhido, marca_escolhida, observacao, created_at",
       )
       .eq("oficina_id", oficinaId)
       .eq("ordem_servico_id", orderId)
@@ -501,7 +507,9 @@ async function syncServiceOrderItemsSupabase(
           ? part.cotacaoPecaId
           : null,
       origem_checklist: part.origemChecklist || null,
-      observacao: null,
+      fornecedor_escolhido: part.cotacaoFornecedorEscolhido || null,
+      marca_escolhida: part.cotacaoMarcaEscolhida || null,
+      observacao: part.cotacaoObservacaoEscolhida || null,
     }));
   const servicosPayload = order.servicosMaoDeObra
     .filter((service) => service.servico.trim() || service.descricao.trim())

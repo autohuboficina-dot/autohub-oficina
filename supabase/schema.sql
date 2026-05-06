@@ -64,6 +64,7 @@ begin
     create type cotacao_status as enum (
       'COTACAO_ENVIADA',
       'RESPOSTA_RECEBIDA',
+      'SELECIONADA',
       'FORNECEDOR_ESCOLHIDO',
       'COTACAO_PARCIAL',
       'COTACAO_CONCLUIDA',
@@ -78,6 +79,7 @@ end $$;
 
 alter type orcamento_status add value if not exists 'RASCUNHO';
 alter type orcamento_status add value if not exists 'APROVADO';
+alter type cotacao_status add value if not exists 'SELECIONADA';
 
 create or replace function set_updated_at()
 returns trigger as $$
@@ -304,6 +306,8 @@ create table if not exists respostas_fornecedor (
   constraint respostas_fornecedor_preco_check check (preco >= 0)
 );
 
+alter table respostas_fornecedor add column if not exists escolhido boolean not null default false;
+
 create table if not exists orcamentos (
   id uuid primary key default gen_random_uuid(),
   oficina_id uuid not null references oficinas(id) on delete cascade,
@@ -418,6 +422,9 @@ create index if not exists cotacoes_fornecedor_idx on cotacoes(fornecedor_id);
 create index if not exists cotacao_itens_cotacao_idx on cotacao_itens(cotacao_id);
 create index if not exists respostas_fornecedor_cotacao_idx on respostas_fornecedor(cotacao_id);
 create index if not exists respostas_fornecedor_item_idx on respostas_fornecedor(cotacao_item_id);
+create unique index if not exists respostas_fornecedor_item_escolhido_unique_idx
+  on respostas_fornecedor(cotacao_item_id)
+  where escolhido = true;
 create index if not exists orcamentos_ordem_idx on orcamentos(ordem_servico_id);
 create unique index if not exists orcamentos_public_token_unique_idx on orcamentos(public_token);
 create index if not exists orcamento_revisoes_ordem_idx on orcamento_revisoes(ordem_servico_id);
@@ -611,6 +618,7 @@ begin
           'preco', rf.preco,
           'marca', rf.marca,
           'observacao', rf.observacao,
+          'escolhido', rf.escolhido,
           'data_resposta', rf.data_resposta,
           'fornecedores', jsonb_build_object('nome', fr.nome)
         )

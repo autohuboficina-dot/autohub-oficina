@@ -32,9 +32,17 @@ import {
 } from "../../services/osService";
 import {
   getCotacoes,
+  getCotacoesSupabase,
   saveCotacao,
   saveCotacaoSupabase,
+  selectCotacaoFornecedorSupabase,
   updateCotacao,
+  type CotacaoFornecedorResponse,
+  type CotacaoPeca,
+  type CotacaoPecaEscolha,
+  type CotacaoPecaItem,
+  type CotacaoPecaRespostaItem,
+  type CotacaoStatus,
 } from "../../services/cotacoesService";
 import {
   getFornecedores,
@@ -204,6 +212,49 @@ function createQuoteWhatsappUrl(fornecedor: Fornecedor, message: string) {
   }
 
   return `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(message)}`;
+}
+
+function getQuoteItemsFromOrder(order?: ServiceOrder): CotacaoPecaItem[] {
+  return (order?.pecasNecessarias || [])
+    .filter((part) => part.peca.trim())
+    .map((part) => ({
+      id: `peca-${part.id}`,
+      peca: part.peca.trim(),
+      quantidade: Math.max(Number(part.quantidade || 1), 1),
+      observacao: part.origemChecklist || "",
+    }));
+}
+
+function getResponseForPart(
+  response: CotacaoFornecedorResponse,
+  pecaId: string,
+) {
+  return response.itemResponses.find((item) => item.pecaId === pecaId);
+}
+
+function getChoiceForPart(cotacao: CotacaoPeca, pecaId: string) {
+  return cotacao.pecasEscolhidas.find((choice) => choice.pecaId === pecaId);
+}
+
+function getCotacaoStatusAfterChoice(
+  cotacao: CotacaoPeca,
+  choices: CotacaoPecaEscolha[],
+): CotacaoStatus {
+  const selectedCount = cotacao.pecas.filter((part) =>
+    choices.some((choice) => choice.pecaId === part.id),
+  ).length;
+
+  if (selectedCount >= cotacao.pecas.length && cotacao.pecas.length > 0) {
+    return "Fornecedor escolhido";
+  }
+
+  if (selectedCount > 0) {
+    return "Cotação parcial";
+  }
+
+  return cotacao.status === "Cotação enviada"
+    ? "Resposta recebida"
+    : cotacao.status;
 }
 
 function createChecklistState(order?: ServiceOrder) {
@@ -387,6 +438,11 @@ export default function OSDetail() {
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
   const [quoteForm, setQuoteForm] =
     useState<QuoteFormState>(initialQuoteFormState);
+  const [osCotacoes, setOsCotacoes] = useState<CotacaoPeca[]>(() =>
+    getCotacoes().filter(
+      (cotacao) => cotacao.osId === id || cotacao.osId === order?.id,
+    ),
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -429,6 +485,33 @@ export default function OSDetail() {
       isMounted = false;
     };
   }, [id, oficina_id]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadOrderCotacoes() {
+      if (!order?.id) {
+        return;
+      }
+
+      const loadedCotacoes = oficina_id
+        ? await getCotacoesSupabase(oficina_id)
+        : getCotacoes();
+      const orderCotacoes = loadedCotacoes.filter(
+        (cotacao) => cotacao.osId === order.id || cotacao.osId === order.codigo,
+      );
+
+      if (isMounted) {
+        setOsCotacoes(orderCotacoes);
+      }
+    }
+
+    void loadOrderCotacoes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [order?.id, order?.codigo, oficina_id]);
 
   useEffect(() => {
     if (!order) {
@@ -499,6 +582,7 @@ export default function OSDetail() {
       fornecedores.find((fornecedor) => fornecedor.id === quoteForm.fornecedorId),
     [fornecedores, quoteForm.fornecedorId],
   );
+  const quoteItemsFromOrder = useMemo(() => getQuoteItemsFromOrder(order), [order]);
   const modelSuggestions = vehicleModelsByBrand[vehicleBrand] ?? [];
   const budgetLink = order
     ? createBudgetLink(order.orcamento.publicToken || order.id)
@@ -1164,12 +1248,15 @@ export default function OSDetail() {
       return;
     }
 
-    if (!quoteForm.peca.trim()) {
-      setSaveMessage("Informe a peça para solicitar cotação.");
+    const quoteItems = getQuoteItemsFromOrder(order);
+
+    if (!quoteItems.length) {
+      setSaveMessage(
+        "Esta OS não possui peças salvas para cotação. Adicione e salve as peças antes de solicitar.",
+      );
       return;
     }
 
-    const quantidade = Math.max(Number(quoteForm.quantidade || 1), 1);
     const vehicleInfo = {
       marca: vehicleBrand.trim(),
       modelo: vehicleModel.trim(),
@@ -1179,14 +1266,7 @@ export default function OSDetail() {
       placa: vehiclePlate.trim(),
       chassi: vehicleVin.trim(),
     };
-    const quoteItems = [
-      {
-        id: "peca-modal-1",
-        peca: quoteForm.peca.trim(),
-        quantidade,
-        observacao: "",
-      },
-    ];
+    const mainQuoteItem = quoteItems[0];
     const message = [
       `${oficinaConfig.nomeOficina} - solicitação de cotação`,
       "",
@@ -1198,8 +1278,11 @@ export default function OSDetail() {
       `Placa: ${vehicleInfo.placa || "não informada"}`,
       `Chassi/VIN: ${vehicleInfo.chassi || "não informado"}`,
       "",
-      `Peça solicitada: ${quoteForm.peca.trim()}`,
-      `Quantidade: ${quantidade}`,
+      "Peças solicitadas:",
+      ...quoteItems.map(
+        (quoteItem) =>
+          `- ${quoteItem.peca} | Quantidade: ${quoteItem.quantidade}`,
+      ),
       supplierVisiblePhotos.length
         ? "Fotos técnicas disponíveis no link da cotação."
         : "",
@@ -1219,8 +1302,8 @@ export default function OSDetail() {
       fornecedorId: selectedFornecedor.id,
       fornecedorNome: selectedFornecedor.nome,
       fornecedorWhatsapp: selectedFornecedor.whatsapp,
-      peca: quoteForm.peca.trim(),
-      quantidade,
+      peca: mainQuoteItem.peca,
+      quantidade: mainQuoteItem.quantidade,
       pecas: quoteItems,
       urgencia: quoteForm.urgencia,
       observacao: quoteForm.observacao.trim(),
@@ -1269,9 +1352,81 @@ export default function OSDetail() {
     }
 
     window.open(whatsappUrlWithLink || whatsappUrl, "_blank", "noopener,noreferrer");
+    setOsCotacoes((currentCotacoes) => [newCotacao, ...currentCotacoes]);
     setSaveMessage(`Cotação enviada para ${selectedFornecedor.nome}.`);
     setIsQuoteModalOpen(false);
     resetQuoteForm();
+  }
+
+  async function handleChooseQuoteSupplier(
+    cotacao: CotacaoPeca,
+    cotacaoPart: CotacaoPecaItem,
+    response: CotacaoFornecedorResponse,
+    itemResponse: CotacaoPecaRespostaItem,
+  ) {
+    if (getChoiceForPart(cotacao, cotacaoPart.id)) {
+      setSaveMessage("Esta peça já tem fornecedor escolhido.");
+      return;
+    }
+
+    const nextChoice: CotacaoPecaEscolha = {
+      pecaId: cotacaoPart.id,
+      nomePeca: itemResponse.nomePeca || cotacaoPart.peca,
+      quantidade: Number(itemResponse.quantidade || cotacaoPart.quantidade || 1),
+      fornecedorId: response.fornecedorId,
+      fornecedorNome: response.fornecedorNome,
+      preco: Number(itemResponse.preco || 0),
+      marca: itemResponse.marca,
+      observacao: itemResponse.observacaoFornecedor,
+      dataEscolha: new Date().toISOString(),
+    };
+    const nextChoices = [...cotacao.pecasEscolhidas, nextChoice];
+    const totalSelectedValue = nextChoices.reduce(
+      (total, choice) => total + choice.preco * choice.quantidade,
+      0,
+    );
+    const nextCotacao = {
+      ...cotacao,
+      status: getCotacaoStatusAfterChoice(cotacao, nextChoices),
+      fornecedorEscolhidoId: response.fornecedorId,
+      fornecedorEscolhidoNome: response.fornecedorNome,
+      precoFinalPeca: Number(itemResponse.preco || 0),
+      fornecedorSelecionado: response.fornecedorNome,
+      valorSelecionado: totalSelectedValue,
+      marcaSelecionada: itemResponse.marca,
+      prazoSelecionado: "",
+      pecasEscolhidas: nextChoices,
+    };
+
+    try {
+      const updatedCotacao = await selectCotacaoFornecedorSupabase(
+        nextCotacao,
+        nextChoice,
+      );
+
+      setOsCotacoes((currentCotacoes) =>
+        currentCotacoes.map((currentCotacao) =>
+          currentCotacao.id === cotacao.id ? updatedCotacao : currentCotacao,
+        ),
+      );
+
+      if (oficina_id && order?.id) {
+        const updatedOrder = await getServiceOrderSupabase(oficina_id, order.id);
+
+        if (updatedOrder) {
+          setOrder(updatedOrder);
+          syncLoadedVersion(updatedOrder);
+        }
+      }
+
+      setSaveMessage("Fornecedor selecionado com sucesso.");
+    } catch (error) {
+      setSaveMessage(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível selecionar o fornecedor.",
+      );
+    }
   }
 
   async function handleSaveChanges() {
@@ -1894,6 +2049,291 @@ export default function OSDetail() {
         )}
       </section>
 
+      <section className={sectionClass}>
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <span className="text-sm font-semibold uppercase text-amber-300">
+              Compras
+            </span>
+            <h3 className="mt-1 text-2xl font-bold">
+              Cotações e compras da OS
+            </h3>
+            <p className="mt-2 text-sm text-slate-400">
+              Solicite cotação, acompanhe respostas e escolha o fornecedor sem
+              sair desta OS.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsQuoteModalOpen(true)}
+            className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-400"
+          >
+            Solicitar cotação
+          </button>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-slate-100">
+                Peças salvas na OS
+              </p>
+              <p className="mt-1 text-sm text-slate-400">
+                Peças de checklist e peças adicionadas manualmente entram na
+                cotação.
+              </p>
+            </div>
+            <span className="rounded-full bg-sky-500/15 px-3 py-1 text-xs font-semibold text-sky-200 ring-1 ring-sky-400/30">
+              {quoteItemsFromOrder.length} peça(s)
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {quoteItemsFromOrder.length ? (
+              quoteItemsFromOrder.map((part) => (
+                <div
+                  key={part.id}
+                  className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+                >
+                  <p className="font-medium text-slate-100">{part.peca}</p>
+                  <p className="mt-1 text-slate-400">
+                    Quantidade: {part.quantidade}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-100 md:col-span-2">
+                Nenhuma peça salva nesta OS para cotação.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4">
+          {osCotacoes.length ? (
+            osCotacoes.map((cotacao) => {
+              const selectedChoices = cotacao.pecasEscolhidas;
+
+              return (
+                <article
+                  key={cotacao.id}
+                  className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h4 className="font-semibold text-slate-100">
+                        Cotação {cotacao.id}
+                      </h4>
+                      <p className="mt-1 text-sm text-slate-400">
+                        {cotacao.fornecedorNome} · enviada em{" "}
+                        {formatDate(cotacao.enviadaEm)}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200">
+                      {cotacao.status}
+                    </span>
+                  </div>
+
+                  {selectedChoices.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                      <p className="text-xs font-semibold uppercase text-emerald-200/80">
+                        Fornecedor escolhido
+                      </p>
+                      <div className="mt-2 grid gap-2 md:grid-cols-2">
+                        {selectedChoices.map((choice) => (
+                          <div
+                            key={`${choice.pecaId}-${choice.fornecedorId}`}
+                            className="rounded-lg border border-emerald-400/20 bg-slate-950/50 px-3 py-2"
+                          >
+                            <p className="font-medium">{choice.nomePeca}</p>
+                            <p className="mt-1 text-xs text-emerald-100/80">
+                              {choice.fornecedorNome} · Preço unitário:{" "}
+                              {formatCurrency(choice.preco)} · Total:{" "}
+                              {formatCurrency(choice.preco * choice.quantidade)} ·{" "}
+                              {choice.marca || "Marca não informada"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h5 className="font-semibold text-slate-100">
+                          Respostas dos fornecedores
+                        </h5>
+                        <p className="mt-1 text-sm text-slate-400">
+                          Escolha uma resposta vencedora para cada peça.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200">
+                        {cotacao.responses.length} resposta(s)
+                      </span>
+                    </div>
+
+                    {!cotacao.responses.length && (
+                      <p className="mt-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400">
+                        Aguardando resposta do fornecedor
+                      </p>
+                    )}
+
+                    {cotacao.responses.length > 0 && (
+                      <div className="mt-4 grid gap-4">
+                        {cotacao.pecas.map((cotacaoPart) => {
+                          const partOptions = cotacao.responses
+                            .map((response) => ({
+                              response,
+                              itemResponse: getResponseForPart(
+                                response,
+                                cotacaoPart.id,
+                              ),
+                            }))
+                            .filter(
+                              (
+                                option,
+                              ): option is {
+                                response: CotacaoFornecedorResponse;
+                                itemResponse: CotacaoPecaRespostaItem;
+                              } => Boolean(option.itemResponse),
+                            );
+                          const selectedChoice = getChoiceForPart(
+                            cotacao,
+                            cotacaoPart.id,
+                          );
+
+                          return (
+                            <div
+                              key={cotacaoPart.id}
+                              className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                  <p className="font-semibold text-slate-100">
+                                    {cotacaoPart.peca}
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-400">
+                                    Quantidade: {cotacaoPart.quantidade}
+                                  </p>
+                                </div>
+                                {selectedChoice && (
+                                  <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-200 ring-1 ring-emerald-400/30">
+                                    Escolhido: {selectedChoice.fornecedorNome}
+                                  </span>
+                                )}
+                              </div>
+
+                              {partOptions.length ? (
+                                <div className="mt-4 grid gap-3">
+                                  {partOptions.map(({ response, itemResponse }) => {
+                                    const isSelected =
+                                      selectedChoice?.fornecedorId ===
+                                      response.fornecedorId;
+
+                                    return (
+                                      <div
+                                        key={`${cotacaoPart.id}-${response.fornecedorId}-${itemResponse.dataHora}`}
+                                        className={`grid gap-3 rounded-lg border p-3 md:grid-cols-[1.2fr_110px_140px_140px_1fr_1.2fr_auto] md:items-center ${
+                                          isSelected
+                                            ? "border-emerald-400/40 bg-emerald-500/10"
+                                            : "border-slate-800 bg-slate-900"
+                                        }`}
+                                      >
+                                        <div>
+                                          <span className="text-xs uppercase text-slate-500">
+                                            Fornecedor
+                                          </span>
+                                          <p className="mt-1 font-medium text-slate-100">
+                                            {response.fornecedorNome}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <span className="text-xs uppercase text-slate-500">
+                                            Qtd.
+                                          </span>
+                                          <p className="mt-1 text-sm font-semibold text-slate-100">
+                                            {itemResponse.quantidade}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <span className="text-xs uppercase text-slate-500">
+                                            Preço unitário
+                                          </span>
+                                          <p className="mt-1 text-sm font-semibold text-slate-100">
+                                            {formatCurrency(itemResponse.preco)}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <span className="text-xs uppercase text-slate-500">
+                                            Total
+                                          </span>
+                                          <p className="mt-1 text-sm font-semibold text-slate-100">
+                                            {formatCurrency(
+                                              itemResponse.preco *
+                                                itemResponse.quantidade,
+                                            )}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <span className="text-xs uppercase text-slate-500">
+                                            Marca
+                                          </span>
+                                          <p className="mt-1 text-sm text-slate-300">
+                                            {itemResponse.marca || "-"}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <span className="text-xs uppercase text-slate-500">
+                                            Observação
+                                          </span>
+                                          <p className="mt-1 text-sm text-slate-300">
+                                            {itemResponse.observacaoFornecedor || "-"}
+                                          </p>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            void handleChooseQuoteSupplier(
+                                              cotacao,
+                                              cotacaoPart,
+                                              response,
+                                              itemResponse,
+                                            )
+                                          }
+                                          disabled={Boolean(selectedChoice)}
+                                          className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                          {isSelected
+                                            ? "Escolhido"
+                                            : "Escolher este fornecedor"}
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="mt-4 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-400">
+                                  Aguardando resposta do fornecedor
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </article>
+              );
+            })
+          ) : (
+            <p className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
+              Nenhuma cotação enviada para esta OS ainda.
+            </p>
+          )}
+        </div>
+      </section>
+
       {isQuoteModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-xl shadow-slate-950/40 sm:p-6">
@@ -1968,54 +2408,40 @@ export default function OSDetail() {
                 </div>
               )}
 
-              <div className="grid gap-5 md:grid-cols-[1fr_140px_180px]">
-                <div>
-                  <label className={labelClass}>Peça</label>
-                  <input
-                    className={inputClass}
-                    placeholder="Pastilha, filtro, sensor..."
-                    value={quoteForm.peca}
-                    onChange={(event) =>
-                      setQuoteForm((currentState) => ({
-                        ...currentState,
-                        peca: event.target.value,
-                      }))
-                    }
-                  />
+              <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-100">
+                      Peças da OS
+                    </p>
+                    <p className="mt-1 text-sm text-slate-400">
+                      A solicitação será enviada com as peças salvas nesta OS.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-sky-500/15 px-3 py-1 text-xs font-semibold text-sky-200 ring-1 ring-sky-400/30">
+                    {quoteItemsFromOrder.length} peça(s)
+                  </span>
                 </div>
-
-                <div>
-                  <label className={labelClass}>Quantidade</label>
-                  <input
-                    className={inputClass}
-                    type="number"
-                    min="1"
-                    value={quoteForm.quantidade}
-                    onChange={(event) =>
-                      setQuoteForm((currentState) => ({
-                        ...currentState,
-                        quantidade: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Urgência</label>
-                  <select
-                    className={inputClass}
-                    value={quoteForm.urgencia}
-                    onChange={(event) =>
-                      setQuoteForm((currentState) => ({
-                        ...currentState,
-                        urgencia:
-                          event.target.value === "Urgente" ? "Urgente" : "Normal",
-                      }))
-                    }
-                  >
-                    <option>Normal</option>
-                    <option>Urgente</option>
-                  </select>
+                <div className="mt-3 grid gap-2">
+                  {quoteItemsFromOrder.length ? (
+                    quoteItemsFromOrder.map((part) => (
+                      <div
+                        key={part.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+                      >
+                        <span className="font-medium text-slate-100">
+                          {part.peca}
+                        </span>
+                        <span className="text-slate-400">
+                          Quantidade: {part.quantidade}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                      Nenhuma peça salva nesta OS para cotação.
+                    </p>
+                  )}
                 </div>
               </div>
 
