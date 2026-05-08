@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { normalizeRole } from "../../accessControl";
 import { useAuth } from "../../contexts/useAuth";
 import { supabase } from "../../lib/supabase";
+import { updateCurrentRole } from "../../services/configuracoesService";
 
 type LocationState = {
   from?: {
@@ -37,19 +39,29 @@ export default function Login() {
 
     setIsLoading(true);
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password: senha,
     });
 
-    setIsLoading(false);
-
     if (error) {
-      setErrorMessage(error.message);
+      setIsLoading(false);
+      setErrorMessage("E-mail ou senha incorretos");
       return;
     }
 
+    if (data.user) {
+      const { data: usuario } = await supabase
+        .from("usuarios")
+        .select("perfil")
+        .eq("auth_user_id", data.user.id)
+        .maybeSingle<{ perfil: string | null }>();
+
+      updateCurrentRole(normalizeRole(usuario?.perfil ?? null));
+    }
+
     await refreshAuth();
+    setIsLoading(false);
     navigate(redirectTo, { replace: true });
   }
 
@@ -113,6 +125,16 @@ export default function Login() {
         >
           {isLoading ? "Entrando..." : "Entrar"}
         </button>
+
+        <p className="mt-5 text-center text-sm text-slate-400">
+          Ainda não tem conta?{" "}
+          <Link
+            to="/cadastro"
+            className="font-semibold text-sky-300 hover:text-sky-200"
+          >
+            Cadastre-se grátis
+          </Link>
+        </p>
       </form>
     </div>
   );

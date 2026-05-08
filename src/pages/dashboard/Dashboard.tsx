@@ -1,3 +1,4 @@
+import { useLocation } from "react-router-dom";
 import { ROLE_LABELS, type UserRole } from "../../accessControl";
 import { getClientes } from "../../services/clientesService";
 import { getCotacoes } from "../../services/cotacoesService";
@@ -13,6 +14,10 @@ type MetricCard = {
   value: string;
   hint: string;
   tone?: "sky" | "emerald" | "amber" | "red" | "violet";
+};
+
+type DashboardLocationState = {
+  welcomeMessage?: string;
 };
 
 function formatCurrency(value: number) {
@@ -266,10 +271,18 @@ function createMetrics(role: UserRole): MetricCard[] {
 }
 
 export default function Dashboard({ role }: DashboardProps) {
+  const location = useLocation();
+  const locationState = location.state as DashboardLocationState | null;
   const metrics = createMetrics(role);
 
   return (
     <div className="max-w-6xl">
+      {locationState?.welcomeMessage && (
+        <div className="mb-6 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-5 py-4 text-sm font-medium text-emerald-100">
+          {locationState.welcomeMessage}
+        </div>
+      )}
+
       <div className="mb-6">
         <span className="text-sm font-semibold uppercase text-sky-400">
           Dashboard {ROLE_LABELS[role]}

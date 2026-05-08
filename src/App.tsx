@@ -14,6 +14,7 @@ import {
 } from "./accessControl";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import { AuthProvider } from "./contexts/AuthContext";
+import Cadastro from "./pages/cadastro/Cadastro";
 import Clientes from "./pages/clientes/Clientes";
 import ClienteDetail from "./pages/clientes/ClienteDetail";
 import Compras from "./pages/compras/Compras";
@@ -210,6 +211,7 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
+          <Route path="/cadastro" element={<Cadastro />} />
           <Route path="/login" element={<Login />} />
           <Route
             path="/orcamento/:id"
