@@ -12,6 +12,7 @@ import {
   calculatePaymentSimulation,
   getConfiguracoesOficina,
 } from "../../services/configuracoesService";
+import { getChecklistConfig } from "../../services/checklistConfigService";
 import {
   createServiceOrderTimelineEvent,
   createServiceOrderId,
@@ -25,15 +26,6 @@ import {
   type ServiceOrderPhoto,
 } from "../../services/osService";
 import ServiceOrderPhotosSection from "./ServiceOrderPhotosSection";
-
-const checklistItems = [
-  "Freio",
-  "Pneus",
-  "Óleo",
-  "Suspensão",
-  "Bateria",
-  "Iluminação",
-];
 
 type PartLine = {
   id: number;
@@ -58,7 +50,7 @@ type ChecklistFormState = Record<
   }
 >;
 
-function createInitialChecklistState() {
+function createInitialChecklistState(checklistItems: string[]) {
   return checklistItems.reduce<ChecklistFormState>((state, item) => {
     state[item] = { status: "", observacaoTecnica: "" };
     return state;
@@ -75,6 +67,7 @@ export default function OSNew() {
   const { oficina_id } = useAuth();
   const [clientes, setClientes] = useState<Cliente[]>(() => getClientes());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
+  const [checklistItems] = useState(() => getChecklistConfig());
   const [selectedClienteId, setSelectedClienteId] = useState(() => {
     const clienteId = searchParams.get("clienteId") || "";
     return getClientes().some((cliente) => cliente.id === clienteId) ? clienteId : "";
@@ -85,7 +78,7 @@ export default function OSNew() {
   const [probableCause, setProbableCause] = useState("");
   const [recommendedSolution, setRecommendedSolution] = useState("");
   const [checklistState, setChecklistState] = useState<ChecklistFormState>(
-    createInitialChecklistState,
+    () => createInitialChecklistState(checklistItems),
   );
   const [partLines, setPartLines] = useState<PartLine[]>([
     { id: 1, name: "", quantity: "1", unitValue: "" },

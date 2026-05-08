@@ -3,14 +3,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
 import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
-import { getClientes, type Cliente } from "../../services/clientesService";
-import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
   calculatePaymentSimulation,
   getConfiguracoesOficina,
 } from "../../services/configuracoesService";
+import { getChecklistConfig } from "../../services/checklistConfigService";
 import {
-  SERVICE_ORDER_STATUSES,
   appendServiceOrderTimelineEvent,
   getBudgetApprovalBadgeClass,
   getBudgetApprovalLabel,
@@ -32,10 +30,7 @@ import {
 } from "../../services/osService";
 import {
   getCotacoes,
-  getCotacoesSupabase,
   saveCotacao,
-  saveCotacaoSupabase,
-  selectCotacaoFornecedorSupabase,
   updateCotacao,
   type CotacaoFornecedorResponse,
   type CotacaoPeca,
@@ -50,15 +45,6 @@ import {
 } from "../../services/fornecedoresService";
 import { registrarSaidaEstoque } from "../../services/estoqueService";
 import ServiceOrderPhotosSection from "./ServiceOrderPhotosSection";
-
-const checklistItems = [
-  "Freio",
-  "Pneus",
-  "Óleo",
-  "Suspensão",
-  "Bateria",
-  "Iluminação",
-];
 
 type PartLine = {
   id: number;
@@ -118,6 +104,61 @@ type QuoteFormState = {
   fotos: ServiceOrderPhoto[];
 };
 
+type DetailTabId =
+  | "overview"
+  | "diagnostico"
+  | "pecas"
+  | "orcamento"
+  | "timeline";
+
+type StoredPerfil = "admin" | "atendimento" | "mecanico" | "compras" | "financeiro";
+
+const detailTabs: { id: DetailTabId; label: string }[] = [
+  { id: "overview", label: "Visão Geral" },
+  { id: "diagnostico", label: "Diagnóstico" },
+  { id: "pecas", label: "Peças e Compras" },
+  { id: "orcamento", label: "Orçamento" },
+  { id: "timeline", label: "Timeline" },
+];
+
+function getStoredPerfil(): StoredPerfil {
+  if (typeof localStorage === "undefined") {
+    return "atendimento";
+  }
+
+  const storedPerfil = localStorage.getItem("autohub:perfil");
+
+  if (
+    storedPerfil === "admin" ||
+    storedPerfil === "atendimento" ||
+    storedPerfil === "mecanico" ||
+    storedPerfil === "compras" ||
+    storedPerfil === "financeiro"
+  ) {
+    return storedPerfil;
+  }
+
+  return "atendimento";
+}
+
+function getDefaultDetailTab(): DetailTabId {
+  const perfil = getStoredPerfil();
+
+  if (perfil === "mecanico") {
+    return "diagnostico";
+  }
+
+  if (perfil === "compras") {
+    return "pecas";
+  }
+
+  if (perfil === "financeiro") {
+    return "orcamento";
+  }
+
+  return "overview";
+}
+
 const initialQuoteFormState: QuoteFormState = {
   fornecedorId: "",
   peca: "",
@@ -125,14 +166,6 @@ const initialQuoteFormState: QuoteFormState = {
   urgencia: "Normal",
   observacao: "",
   fotos: [],
-};
-
-const EXECUTION_STATUS_TRANSITIONS: Partial<
-  Record<ServiceOrderStatus, ServiceOrderStatus>
-> = {
-  APROVADA: "EM_EXECUCAO",
-  EM_EXECUCAO: "FINALIZADA",
-  FINALIZADA: "ENTREGUE",
 };
 
 function toNumber(value: string) {
@@ -257,7 +290,15 @@ function getCotacaoStatusAfterChoice(
     : cotacao.status;
 }
 
-function createChecklistState(order?: ServiceOrder) {
+function getChecklistItemsForOrder(order?: ServiceOrder) {
+  if (order?.checklistInicial.length) {
+    return order.checklistInicial.map((item) => item.item);
+  }
+
+  return getChecklistConfig();
+}
+
+function createChecklistState(order: ServiceOrder | undefined, checklistItems: string[]) {
   return checklistItems.reduce<ChecklistFormState>((state, item) => {
     const storedItem = order?.checklistInicial.find(
       (checklistItem) => checklistItem.item === item,
@@ -314,17 +355,83 @@ function createLaborLines(order?: ServiceOrder): LaborLine[] {
   }));
 }
 
+type StoredVehicleObject = Partial<{
+  marca: string;
+  modelo: string;
+  ano: string;
+  placa: string;
+  motor: string;
+  combustivel: string;
+  chassiVin: string;
+  chassi: string;
+  kmAtual: string;
+}>;
+
+function isStoredVehicleObject(value: unknown): value is StoredVehicleObject {
+  return typeof value === "object" && value !== null;
+}
+
+function getVehicleField(
+  order: ServiceOrder | undefined,
+  field: keyof StoredVehicleObject,
+) {
+  if (!order) {
+    return "";
+  }
+
+  const vehicleFromOrder = (order as ServiceOrder & { veiculo?: unknown }).veiculo;
+  const vehicleText = typeof vehicleFromOrder === "string" ? vehicleFromOrder : "";
+  const vehicleObjectValue = isStoredVehicleObject(vehicleFromOrder)
+    ? vehicleFromOrder[field]
+    : "";
+  const explicitBrand =
+    (isStoredVehicleObject(vehicleFromOrder) ? vehicleFromOrder.marca : "") ||
+    order.veiculoDados.marca ||
+    order.veiculoMarca;
+  const modelCandidate =
+    (isStoredVehicleObject(vehicleFromOrder) ? vehicleFromOrder.modelo : "") ||
+    order.veiculoDados.modelo ||
+    order.veiculoModelo ||
+    vehicleText;
+
+  if ((field === "marca" || field === "modelo") && !explicitBrand && modelCandidate) {
+    const [derivedBrand = "", ...modelParts] = modelCandidate.trim().split(/\s+/);
+
+    return field === "marca" ? derivedBrand : modelParts.join(" ");
+  }
+
+  const normalizedValue =
+    field === "chassi"
+      ? order.veiculoDados.chassiVin
+      : order.veiculoDados[field as keyof ServiceOrder["veiculoDados"]];
+  const flatValueByField: Record<keyof StoredVehicleObject, string> = {
+    marca: order.veiculoMarca,
+    modelo: order.veiculoModelo,
+    ano: order.veiculoAno,
+    placa: order.veiculoPlaca || order.placa,
+    motor: order.veiculoMotor,
+    combustivel: order.veiculoCombustivel,
+    chassiVin: order.veiculoChassi,
+    chassi: order.veiculoChassi,
+    kmAtual: order.veiculoDados.kmAtual,
+  };
+
+  return String(vehicleObjectValue || normalizedValue || flatValueByField[field] || "");
+}
+
 export default function OSDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { oficina_id } = useAuth();
-  const [clientes] = useState<Cliente[]>(() => getClientes());
   const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [order, setOrder] = useState<ServiceOrder | undefined>(() =>
     getStoredOrders().find(
-      (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
+      (storedOrder) => storedOrder.codigo === id || storedOrder.id === id,
     ),
+  );
+  const [checklistItems, setChecklistItems] = useState<string[]>(() =>
+    getChecklistItemsForOrder(order),
   );
   const [isLoadingOrder, setIsLoadingOrder] = useState(Boolean(id));
   const [hasLoadedOrder, setHasLoadedOrder] = useState(false);
@@ -344,20 +451,18 @@ export default function OSDetail() {
   const [clientEmail, setClientEmail] = useState(order?.clienteDados.email || "");
   const [selectedClienteId, setSelectedClienteId] = useState(order?.clienteId || "");
   const [selectedVehicleId, setSelectedVehicleId] = useState(order?.veiculoId || "");
-  const [vehicleBrand, setVehicleBrand] = useState(order?.veiculoDados.marca || "");
-  const [vehicleModel, setVehicleModel] = useState(order?.veiculoDados.modelo || "");
-  const [vehicleYear, setVehicleYear] = useState(order?.veiculoDados.ano || "");
-  const [vehiclePlate, setVehiclePlate] = useState(
-    order?.veiculoDados.placa || order?.placa || "",
-  );
-  const [vehicleMotor, setVehicleMotor] = useState(order?.veiculoDados.motor || "");
+  const [vehicleBrand, setVehicleBrand] = useState(getVehicleField(order, "marca"));
+  const [vehicleModel, setVehicleModel] = useState(getVehicleField(order, "modelo"));
+  const [vehicleYear, setVehicleYear] = useState(getVehicleField(order, "ano"));
+  const [vehiclePlate, setVehiclePlate] = useState(getVehicleField(order, "placa"));
+  const [vehicleMotor, setVehicleMotor] = useState(getVehicleField(order, "motor"));
   const [vehicleFuel, setVehicleFuel] = useState(
-    order?.veiculoDados.combustivel || "",
+    getVehicleField(order, "combustivel"),
   );
   const [vehicleVin, setVehicleVin] = useState(
-    order?.veiculoDados.chassiVin || "",
+    getVehicleField(order, "chassiVin") || getVehicleField(order, "chassi"),
   );
-  const [vehicleKm, setVehicleKm] = useState(order?.veiculoDados.kmAtual || "");
+  const [vehicleKm, setVehicleKm] = useState(getVehicleField(order, "kmAtual"));
   const [status, setStatus] = useState<ServiceOrderStatus>(
     order?.status || "ABERTA",
   );
@@ -389,7 +494,7 @@ export default function OSDetail() {
     order?.diagnostico.solucaoRecomendada || "",
   );
   const [checklistState, setChecklistState] = useState<ChecklistFormState>(() =>
-    createChecklistState(order),
+    createChecklistState(order, getChecklistItemsForOrder(order)),
   );
   const [partLines, setPartLines] = useState<PartLine[]>(() =>
     createPartLines(order),
@@ -436,11 +541,15 @@ export default function OSDetail() {
   const [saveMessage, setSaveMessage] = useState("");
   const [showBudgetActions, setShowBudgetActions] = useState(false);
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<DetailTabId>(() =>
+    getDefaultDetailTab(),
+  );
+  const [selectedQuoteItemIds, setSelectedQuoteItemIds] = useState<string[]>([]);
   const [quoteForm, setQuoteForm] =
     useState<QuoteFormState>(initialQuoteFormState);
   const [osCotacoes, setOsCotacoes] = useState<CotacaoPeca[]>(() =>
     getCotacoes().filter(
-      (cotacao) => cotacao.osId === id || cotacao.osId === order?.id,
+      (cotacao) => cotacao.osId === id || cotacao.osId === order?.codigo,
     ),
   );
 
@@ -462,11 +571,9 @@ export default function OSDetail() {
       }
 
       try {
-        const loadedOrder = oficina_id
-          ? await getServiceOrderSupabase(oficina_id, id)
-          : getStoredOrders().find(
-              (storedOrder) => storedOrder.id === id || storedOrder.codigo === id,
-            );
+        const loadedOrder = getStoredOrders().find(
+          (storedOrder) => storedOrder.codigo === id || storedOrder.id === id,
+        );
 
         if (isMounted) {
           setOrder((currentOrder) => loadedOrder ?? currentOrder);
@@ -484,7 +591,7 @@ export default function OSDetail() {
     return () => {
       isMounted = false;
     };
-  }, [id, oficina_id]);
+  }, [id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -494,11 +601,9 @@ export default function OSDetail() {
         return;
       }
 
-      const loadedCotacoes = oficina_id
-        ? await getCotacoesSupabase(oficina_id)
-        : getCotacoes();
+      const loadedCotacoes = getCotacoes();
       const orderCotacoes = loadedCotacoes.filter(
-        (cotacao) => cotacao.osId === order.id || cotacao.osId === order.codigo,
+        (cotacao) => cotacao.osId === order.codigo,
       );
 
       if (isMounted) {
@@ -532,14 +637,14 @@ export default function OSDetail() {
       setClientEmail(order.clienteDados.email || "");
       setSelectedClienteId(order.clienteId || "");
       setSelectedVehicleId(order.veiculoId || "");
-      setVehicleBrand(order.veiculoDados.marca || "");
-      setVehicleModel(order.veiculoDados.modelo || "");
-      setVehicleYear(order.veiculoDados.ano || "");
-      setVehiclePlate(order.veiculoDados.placa || order.placa || "");
-      setVehicleMotor(order.veiculoDados.motor || "");
-      setVehicleFuel(order.veiculoDados.combustivel || "");
-      setVehicleVin(order.veiculoDados.chassiVin || "");
-      setVehicleKm(order.veiculoDados.kmAtual || "");
+      setVehicleBrand(getVehicleField(order, "marca"));
+      setVehicleModel(getVehicleField(order, "modelo"));
+      setVehicleYear(getVehicleField(order, "ano"));
+      setVehiclePlate(getVehicleField(order, "placa"));
+      setVehicleMotor(getVehicleField(order, "motor"));
+      setVehicleFuel(getVehicleField(order, "combustivel"));
+      setVehicleVin(getVehicleField(order, "chassiVin") || getVehicleField(order, "chassi"));
+      setVehicleKm(getVehicleField(order, "kmAtual"));
       setStatus(order.status || "ABERTA");
       setApprovalStatus(order.statusAprovacao || "pendente");
       setApprovalConfirmationDate(order.dataConfirmacaoOficina || "");
@@ -549,7 +654,9 @@ export default function OSDetail() {
       setDefectFound(order.diagnostico.defeitoEncontrado || "");
       setProbableCause(order.diagnostico.causaProvavel || "");
       setRecommendedSolution(order.diagnostico.solucaoRecomendada || "");
-      setChecklistState(createChecklistState(order));
+      const nextChecklistItems = getChecklistItemsForOrder(order);
+      setChecklistItems(nextChecklistItems);
+      setChecklistState(createChecklistState(order, nextChecklistItems));
       setPartLines(createPartLines(order));
       setLaborLines(createLaborLines(order));
       setPhotos(order.fotosOs || []);
@@ -573,17 +680,19 @@ export default function OSDetail() {
     };
   }, [order]);
 
-  const selectedCliente = useMemo(
-    () => clientes.find((cliente) => cliente.id === selectedClienteId),
-    [clientes, selectedClienteId],
-  );
   const selectedFornecedor = useMemo(
     () =>
       fornecedores.find((fornecedor) => fornecedor.id === quoteForm.fornecedorId),
     [fornecedores, quoteForm.fornecedorId],
   );
   const quoteItemsFromOrder = useMemo(() => getQuoteItemsFromOrder(order), [order]);
-  const modelSuggestions = vehicleModelsByBrand[vehicleBrand] ?? [];
+  const quotedPartIds = useMemo(() => {
+    return new Set(osCotacoes.flatMap((cotacao) => cotacao.pecas.map((part) => part.id)));
+  }, [osCotacoes]);
+  const quoteItemsWithoutCotacao = useMemo(
+    () => quoteItemsFromOrder.filter((part) => !quotedPartIds.has(part.id)),
+    [quoteItemsFromOrder, quotedPartIds],
+  );
   const budgetLink = order
     ? createBudgetLink(order.orcamento.publicToken || order.id)
     : "";
@@ -624,6 +733,8 @@ export default function OSDetail() {
 
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
+  const readOnlyInputClass =
+    "w-full cursor-default rounded-lg border border-transparent bg-white/5 px-4 py-3 text-sm text-slate-300 outline-none focus:border-transparent";
   const compactInputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none transition focus:border-sky-500";
   const labelClass = "mb-2 block text-sm font-medium text-slate-300";
@@ -856,99 +967,6 @@ export default function OSDetail() {
 
   function removePartLine(lineId: number) {
     setPartLines((lines) => lines.filter((line) => line.id !== lineId));
-  }
-
-  function handleSelectCliente(clienteId: string) {
-    const cliente = clientes.find((currentCliente) => currentCliente.id === clienteId);
-    const documentDigits = onlyDigits(cliente?.documento || "");
-
-    setSelectedClienteId(clienteId);
-    setSelectedVehicleId("");
-    setClientName(cliente?.nome || "");
-    setClientPhone(formatPhone(cliente?.telefone || ""));
-    setClientEmail(cliente?.email || "");
-    setClientCpf(
-      documentDigits.length <= 11 ? formatCpfCnpj(cliente?.documento || "") : "",
-    );
-    setClientCnpj(
-      documentDigits.length > 11 ? formatCpfCnpj(cliente?.documento || "") : "",
-    );
-  }
-
-  function handleSelectVehicle(vehicleId: string) {
-    const veiculo = selectedCliente?.veiculos.find(
-      (currentVehicle) => currentVehicle.id === vehicleId,
-    );
-
-    setSelectedVehicleId(vehicleId);
-    setVehicleBrand(veiculo?.marca || "");
-    setVehicleModel(veiculo?.modelo || "");
-    setVehicleYear(veiculo?.ano || "");
-    setVehiclePlate(veiculo?.placa || "");
-    setVehicleMotor(veiculo?.motor || "");
-    setVehicleFuel(veiculo?.combustivel || "");
-    setVehicleVin(veiculo?.chassiVin || "");
-  }
-
-  async function handleStatusChange(nextStatus: ServiceOrderStatus) {
-    setStatus(nextStatus);
-
-    if (!order) {
-      return;
-    }
-
-    if (
-      ["EM_EXECUCAO", "FINALIZADA", "ENTREGUE"].includes(nextStatus) &&
-      EXECUTION_STATUS_TRANSITIONS[order.status] !== nextStatus
-    ) {
-      setSaveMessage(
-        "Ação inválida para o status atual. Siga a sequência da execução da OS.",
-      );
-      return;
-    }
-
-    if (hasConcurrentOrderChange()) {
-      setSaveMessage(
-        "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
-      );
-      return;
-    }
-
-    const updatedOrders = getStoredOrders().map((storedOrder) =>
-      storedOrder.id === order.id
-        ? updateServiceOrderStatusWithTimeline(storedOrder, nextStatus, {
-            tipo: "status",
-            titulo: "Status alterado",
-            descricao: `Status alterado para ${getServiceOrderStatusLabel(nextStatus)}.`,
-            usuarioResponsavel: "Oficina",
-          })
-        : storedOrder,
-    );
-    saveStoredOrders(updatedOrders);
-    const updatedOrder = updatedOrders.find(
-      (storedOrder) => storedOrder.id === order.id,
-    );
-
-    if (updatedOrder) {
-      try {
-        const savedOrder = oficina_id
-          ? await updateServiceOrderSupabase(oficina_id, updatedOrder)
-          : updatedOrder;
-
-        syncLoadedVersion(savedOrder);
-        registerStockExitForOrder(savedOrder);
-        setOrder(savedOrder);
-      } catch (error) {
-        setSaveMessage(
-          error instanceof Error
-            ? error.message
-            : "Não foi possível atualizar o status.",
-        );
-        return;
-      }
-    }
-
-    setSaveMessage("Status atualizado.");
   }
 
   async function handleManualStatusAction(
@@ -1210,6 +1228,12 @@ export default function OSDetail() {
 
   function resetQuoteForm() {
     setQuoteForm(initialQuoteFormState);
+    setSelectedQuoteItemIds([]);
+  }
+
+  function openQuoteModalForItems(itemIds: string[]) {
+    setSelectedQuoteItemIds(itemIds);
+    setIsQuoteModalOpen(true);
   }
 
   function handleOpenQuoteModal() {
@@ -1235,7 +1259,7 @@ export default function OSDetail() {
     if (updatedOrder) {
       syncLoadedVersion(updatedOrder);
     }
-    navigate(`/compras?osId=${order.id}`);
+    navigate(`/compras?osId=${order.codigo}`);
   }
 
   async function handleSendQuote() {
@@ -1248,7 +1272,10 @@ export default function OSDetail() {
       return;
     }
 
-    const quoteItems = getQuoteItemsFromOrder(order);
+    const allQuoteItems = getQuoteItemsFromOrder(order);
+    const quoteItems = selectedQuoteItemIds.length
+      ? allQuoteItems.filter((item) => selectedQuoteItemIds.includes(item.id))
+      : allQuoteItems;
 
     if (!quoteItems.length) {
       setSaveMessage(
@@ -1297,7 +1324,7 @@ export default function OSDetail() {
     }
 
     const cotacaoPayload = {
-      osId: order.id,
+      osId: order.codigo,
       oficinaNome: oficinaConfig.nomeOficina,
       fornecedorId: selectedFornecedor.id,
       fornecedorNome: selectedFornecedor.nome,
@@ -1315,9 +1342,7 @@ export default function OSDetail() {
     let newCotacao;
 
     try {
-      newCotacao = oficina_id
-        ? await saveCotacaoSupabase(oficina_id, cotacaoPayload)
-        : saveCotacao(cotacaoPayload);
+      newCotacao = saveCotacao(cotacaoPayload);
     } catch (error) {
       setSaveMessage(
         error instanceof Error
@@ -1399,10 +1424,7 @@ export default function OSDetail() {
     };
 
     try {
-      const updatedCotacao = await selectCotacaoFornecedorSupabase(
-        nextCotacao,
-        nextChoice,
-      );
+      const updatedCotacao = updateCotacao(nextCotacao);
 
       setOsCotacoes((currentCotacoes) =>
         currentCotacoes.map((currentCotacao) =>
@@ -1410,16 +1432,83 @@ export default function OSDetail() {
         ),
       );
 
-      if (oficina_id && order?.id) {
-        const updatedOrder = await getServiceOrderSupabase(oficina_id, order.id);
+      if (order) {
+        const partId = Number(cotacaoPart.id.replace("peca-", ""));
+        const updatedOrders = getStoredOrders().map((storedOrder) => {
+          if (storedOrder.codigo !== order.codigo) {
+            return storedOrder;
+          }
+
+          const pecasNecessarias = storedOrder.pecasNecessarias.map((part) => {
+            const isSamePart =
+              part.id === partId ||
+              part.peca.trim().toLowerCase() === cotacaoPart.peca.trim().toLowerCase();
+
+            if (!isSamePart) {
+              return part;
+            }
+
+            const valorUnitario = Number(itemResponse.preco || 0);
+
+            return {
+              ...part,
+              valorUnitario,
+              valorTotal: valorUnitario * Number(part.quantidade || 1),
+              compraId: cotacao.id,
+              cotacaoPecaId: cotacaoPart.id,
+              cotacaoFornecedorEscolhido: response.fornecedorNome,
+              cotacaoPrecoEscolhido: valorUnitario,
+              cotacaoMarcaEscolhida: itemResponse.marca,
+              cotacaoObservacaoEscolhida: itemResponse.observacaoFornecedor,
+              cotacaoDataEscolha: nextChoice.dataEscolha,
+            };
+          });
+          const allPartsConfirmed =
+            pecasNecessarias.length > 0 &&
+            pecasNecessarias.every((part) => Boolean(part.compraId));
+          const orderWithPurchase = {
+            ...storedOrder,
+            pecasNecessarias,
+            updatedAt: new Date().toISOString(),
+            version: storedOrder.version + 1,
+          };
+
+          return allPartsConfirmed
+            ? updateServiceOrderStatusWithTimeline(
+                orderWithPurchase,
+                "AGUARDANDO_PECA",
+                {
+                  tipo: "compra_confirmada",
+                  titulo: "Compra confirmada",
+                  descricao:
+                    "Todas as peças da OS tiveram compra confirmada com fornecedor.",
+                  usuarioResponsavel: "Compras",
+                },
+              )
+            : appendServiceOrderTimelineEvent(orderWithPurchase, {
+                tipo: "compra_confirmada",
+                titulo: "Compra confirmada",
+                descricao: `Compra confirmada para ${cotacaoPart.peca}.`,
+                usuarioResponsavel: "Compras",
+                statusAnterior: storedOrder.status,
+                statusNovo: storedOrder.status,
+              });
+        });
+        const updatedOrder = updatedOrders.find(
+          (storedOrder) => storedOrder.codigo === order.codigo,
+        );
+
+        saveStoredOrders(updatedOrders);
 
         if (updatedOrder) {
           setOrder(updatedOrder);
+          setStatus(updatedOrder.status);
+          setPartLines(createPartLines(updatedOrder));
           syncLoadedVersion(updatedOrder);
         }
       }
 
-      setSaveMessage("Fornecedor selecionado com sucesso.");
+      setSaveMessage("Compra confirmada e peça atualizada na OS.");
     } catch (error) {
       setSaveMessage(
         error instanceof Error
@@ -1431,11 +1520,6 @@ export default function OSDetail() {
 
   async function handleSaveChanges() {
     if (!order) {
-      return;
-    }
-
-    if (!oficina_id) {
-      setSaveMessage("Não foi possível identificar a oficina do usuário logado.");
       return;
     }
 
@@ -1459,16 +1543,6 @@ export default function OSDetail() {
 
     if (!clientName.trim()) {
       setSaveMessage("Informe o cliente antes de salvar a OS.");
-      return;
-    }
-
-    if (!selectedClienteId) {
-      setSaveMessage("Selecione um cliente vinculado antes de salvar a OS.");
-      return;
-    }
-
-    if (!selectedVehicleId) {
-      setSaveMessage("Selecione um veículo vinculado antes de salvar a OS.");
       return;
     }
 
@@ -1542,10 +1616,10 @@ export default function OSDetail() {
       taxaAplicada: order.taxaAplicada,
       descontoPagamentoAplicado: order.descontoPagamentoAplicado,
       taxaPagamentoAplicada: order.taxaPagamentoAplicada,
-      clienteId: selectedClienteId,
+      clienteId: selectedClienteId || order.clienteId,
       clienteNome: clientName.trim(),
       clienteTelefone: clientPhoneDigits,
-      veiculoId: selectedVehicleId,
+      veiculoId: selectedVehicleId || order.veiculoId,
       veiculoMarca: vehicleBrand.trim(),
       veiculoModelo: vehicleModel.trim(),
       veiculoAno: vehicleYear.trim(),
@@ -1601,19 +1675,17 @@ export default function OSDetail() {
     });
 
     try {
-      const savedOrder = await updateServiceOrderSupabase(
-        oficina_id,
-        orderWithTimeline,
-      );
+      const savedOrder = oficina_id
+        ? await updateServiceOrderSupabase(oficina_id, orderWithTimeline)
+        : orderWithTimeline;
       const updatedOrders = getStoredOrders().map((storedOrder) =>
-        storedOrder.id === order.id ? savedOrder : storedOrder,
+        storedOrder.codigo === order.codigo ? savedOrder : storedOrder,
       );
       saveStoredOrders(updatedOrders);
       registerStockExitForOrder(savedOrder);
-      const refetchedOrder = await getServiceOrderSupabase(
-        oficina_id,
-        savedOrder.id,
-      );
+      const refetchedOrder = oficina_id
+        ? await getServiceOrderSupabase(oficina_id, savedOrder.id)
+        : undefined;
       const completeOrder = refetchedOrder ?? savedOrder;
       syncLoadedVersion(completeOrder);
       setOrder(completeOrder);
@@ -1699,8 +1771,15 @@ export default function OSDetail() {
         <section className={sectionClass}>
           <h2 className="text-3xl font-bold">OS não encontrada</h2>
           <p className="mt-2 text-slate-400">
-            Não existe ordem de serviço salva para o ID informado.
+            Não existe ordem de serviço salva para o código informado.
           </p>
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="mt-5 rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-800"
+          >
+            Voltar
+          </button>
         </section>
       </div>
     );
@@ -1744,6 +1823,28 @@ export default function OSDetail() {
       </div>
       </div>
 
+      <div className="mb-6 flex gap-2 overflow-x-auto border-b border-slate-800">
+        {detailTabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${
+                isActive
+                  ? "border-sky-400 bg-slate-900 text-sky-100"
+                  : "border-transparent text-slate-400 hover:bg-slate-900/70 hover:text-slate-200"
+              }`}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab === "overview" && (
       <section className={`${sectionClass} mb-6`}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -1880,7 +1981,9 @@ export default function OSDetail() {
           )}
         </div>
       </section>
+      )}
 
+      {activeTab === "overview" && (
       <section className={`${sectionClass} mb-6`}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -2048,7 +2151,106 @@ export default function OSDetail() {
           </div>
         )}
       </section>
+      )}
 
+      {activeTab === "pecas" && (
+      <section className={`${sectionClass} mb-6`}>
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-2xl font-bold">Peças necessárias</h3>
+            </div>
+
+            <button
+              type="button"
+              onClick={addPartLine}
+              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
+              Adicionar peça
+            </button>
+          </div>
+
+          <div className="grid gap-0">
+            {partLines.map((line, index) => {
+              const lineTotal = toNumber(line.quantity) * toNumber(line.unitValue);
+
+              return (
+                <div
+                  key={line.id}
+                  className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(160px,2fr)_100px_130px_130px]"
+                >
+                  <div>
+                    <label className={labelClass}>Peça {index + 1}</label>
+                    <input
+                      className={compactInputClass}
+                      placeholder="Pastilha de freio"
+                      value={line.name}
+                      onChange={(event) =>
+                        updatePartLine(line.id, "name", event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Quantidade</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className={compactInputClass}
+                      value={line.quantity}
+                      onChange={(event) =>
+                        updatePartLine(line.id, "quantity", event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Valor unitário</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className={compactInputClass}
+                      placeholder="0,00"
+                      value={line.unitValue}
+                      onChange={(event) =>
+                        updatePartLine(line.id, "unitValue", event.target.value)
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>Valor total</label>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm font-semibold text-slate-100">
+                      {formatCurrency(lineTotal)}
+                    </div>
+                  </div>
+                  <div className="md:col-span-4">
+                    <button
+                      type="button"
+                      onClick={() => removePartLine(line.id)}
+                      className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                    >
+                      Remover peça
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={addPartLine}
+              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
+              Adicionar peça
+            </button>
+          </div>
+        </section>
+      )}
+
+      {activeTab === "pecas" && (
       <section className={sectionClass}>
         <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -2066,10 +2268,13 @@ export default function OSDetail() {
 
           <button
             type="button"
-            onClick={() => setIsQuoteModalOpen(true)}
+            onClick={() =>
+              openQuoteModalForItems(quoteItemsWithoutCotacao.map((part) => part.id))
+            }
+            disabled={!quoteItemsWithoutCotacao.length}
             className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-400"
           >
-            Solicitar cotação
+            Solicitar cotação de todas
           </button>
         </div>
 
@@ -2080,30 +2285,40 @@ export default function OSDetail() {
                 Peças salvas na OS
               </p>
               <p className="mt-1 text-sm text-slate-400">
-                Peças de checklist e peças adicionadas manualmente entram na
-                cotação.
+                Verificação das peças cadastradas contra as cotações vinculadas.
               </p>
             </div>
             <span className="rounded-full bg-sky-500/15 px-3 py-1 text-xs font-semibold text-sky-200 ring-1 ring-sky-400/30">
-              {quoteItemsFromOrder.length} peça(s)
+              {quoteItemsWithoutCotacao.length} peça(s)
             </span>
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
-            {quoteItemsFromOrder.length ? (
-              quoteItemsFromOrder.map((part) => (
+            {!quoteItemsFromOrder.length ? (
+              <p className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-100 md:col-span-2">
+                Nenhuma peça cadastrada nesta OS. Adicione peças na seção abaixo.
+              </p>
+            ) : quoteItemsWithoutCotacao.length ? (
+              quoteItemsWithoutCotacao.map((part) => (
                 <div
                   key={part.id}
                   className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
                 >
                   <p className="font-medium text-slate-100">{part.peca}</p>
-                  <p className="mt-1 text-slate-400">
-                    Quantidade: {part.quantidade}
-                  </p>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                    <p className="text-slate-400">Quantidade: {part.quantidade}</p>
+                    <button
+                      type="button"
+                      onClick={() => openQuoteModalForItems([part.id])}
+                      className="rounded-lg border border-amber-400/40 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/10"
+                    >
+                      Solicitar cotação
+                    </button>
+                  </div>
                 </div>
               ))
             ) : (
               <p className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-100 md:col-span-2">
-                Nenhuma peça salva nesta OS para cotação.
+                Todas as peças já têm cotação vinculada.
               </p>
             )}
           </div>
@@ -2305,8 +2520,8 @@ export default function OSDetail() {
                                           className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                           {isSelected
-                                            ? "Escolhido"
-                                            : "Escolher este fornecedor"}
+                                            ? "Compra confirmada"
+                                            : "Confirmar esta compra"}
                                         </button>
                                       </div>
                                     );
@@ -2333,6 +2548,7 @@ export default function OSDetail() {
           )}
         </div>
       </section>
+      )}
 
       {isQuoteModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur">
@@ -2520,12 +2736,10 @@ export default function OSDetail() {
           handleSaveChanges();
         }}
       >
+        {activeTab === "overview" && (
         <section className={sectionClass}>
           <div className="mb-6">
-            <span className="text-sm font-semibold uppercase text-sky-400">
-              Etapa 1
-            </span>
-            <h3 className="mt-1 text-2xl font-bold">Entrada do veículo</h3>
+            <h3 className="text-2xl font-bold">Entrada do veículo</h3>
           </div>
 
           <div className="space-y-6">
@@ -2534,67 +2748,41 @@ export default function OSDetail() {
 
               <div className="grid gap-5 md:grid-cols-2">
                 <div>
-                  <label className={labelClass}>Cliente vinculado</label>
-                  <select
-                    className={inputClass}
-                    value={selectedClienteId}
-                    onChange={(event) => handleSelectCliente(event.target.value)}
-                  >
-                    <option value="">Sem vínculo</option>
-                    {clientes.map((cliente) => (
-                      <option key={cliente.id} value={cliente.id}>
-                        {cliente.nome}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
                   <label className={labelClass}>Nome</label>
                   <input
-                    className={inputClass}
-                    placeholder="Nome completo"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={clientName}
-                    onChange={(event) => setClientName(event.target.value)}
                   />
                 </div>
 
                 <div>
                   <label className={labelClass}>Telefone</label>
                   <input
-                    className={inputClass}
+                    className={readOnlyInputClass}
+                    readOnly
                     inputMode="numeric"
-                    placeholder="(00) 00000-0000"
                     value={clientPhone}
-                    onChange={(event) =>
-                      setClientPhone(formatPhone(event.target.value))
-                    }
                   />
                 </div>
 
                 <div>
                   <label className={labelClass}>CPF opcional</label>
                   <input
-                    className={inputClass}
+                    className={readOnlyInputClass}
+                    readOnly
                     inputMode="numeric"
-                    placeholder="000.000.000-00"
                     value={clientCpf}
-                    onChange={(event) =>
-                      setClientCpf(formatCpfCnpj(event.target.value))
-                    }
                   />
                 </div>
 
                 <div>
                   <label className={labelClass}>CNPJ opcional</label>
                   <input
-                    className={inputClass}
+                    className={readOnlyInputClass}
+                    readOnly
                     inputMode="numeric"
-                    placeholder="00.000.000/0000-00"
                     value={clientCnpj}
-                    onChange={(event) =>
-                      setClientCnpj(formatCpfCnpj(event.target.value))
-                    }
                   />
                 </div>
 
@@ -2602,35 +2790,10 @@ export default function OSDetail() {
                   <label className={labelClass}>E-mail opcional</label>
                   <input
                     type="email"
-                    className={inputClass}
-                    placeholder="cliente@email.com"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={clientEmail}
-                    onChange={(event) => setClientEmail(event.target.value)}
                   />
-                </div>
-
-                <div>
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <label className="block text-sm font-medium text-slate-300">
-                      Status da OS
-                    </label>
-                    <span className={getServiceOrderStatusBadgeClass(status)}>
-                      {getServiceOrderStatusLabel(status)}
-                    </span>
-                  </div>
-                  <select
-                    className={inputClass}
-                    value={status}
-                    onChange={(event) =>
-                      handleStatusChange(event.target.value as ServiceOrderStatus)
-                    }
-                  >
-                    {SERVICE_ORDER_STATUSES.map((serviceOrderStatus) => (
-                      <option key={serviceOrderStatus} value={serviceOrderStatus}>
-                        {getServiceOrderStatusLabel(serviceOrderStatus)}
-                      </option>
-                    ))}
-                  </select>
                 </div>
               </div>
             </div>
@@ -2639,140 +2802,87 @@ export default function OSDetail() {
               <h4 className={subTitleClass}>Dados do veículo</h4>
 
               <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
-                <div className="lg:col-span-2">
-                  <label className={labelClass}>Veículo vinculado</label>
-                  <select
-                    className={inputClass}
-                    value={selectedVehicleId}
-                    onChange={(event) => handleSelectVehicle(event.target.value)}
-                    disabled={!selectedCliente}
-                  >
-                    <option value="">
-                      {selectedCliente
-                        ? "Sem vínculo"
-                        : "Selecione um cliente primeiro"}
-                    </option>
-                    {selectedCliente?.veiculos.map((veiculo) => (
-                      <option key={veiculo.id} value={veiculo.id}>
-                        {[veiculo.marca, veiculo.modelo, veiculo.ano]
-                          .filter(Boolean)
-                          .join(" ") || "Veículo sem identificação"}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
                 <div>
                   <label className={labelClass}>Marca</label>
                   <input
-                    className={inputClass}
-                    list="vehicle-brands"
-                    placeholder="Honda"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={vehicleBrand}
-                    onChange={(event) => setVehicleBrand(event.target.value)}
                   />
-                  <datalist id="vehicle-brands">
-                    {vehicleBrands.map((brand) => (
-                      <option key={brand} value={brand} />
-                    ))}
-                  </datalist>
                 </div>
 
                 <div>
                   <label className={labelClass}>Modelo</label>
                   <input
-                    className={inputClass}
-                    list="vehicle-models"
-                    placeholder="Civic"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={vehicleModel}
-                    onChange={(event) => setVehicleModel(event.target.value)}
                   />
-                  <datalist id="vehicle-models">
-                    {modelSuggestions.map((model) => (
-                      <option key={model} value={model} />
-                    ))}
-                  </datalist>
                 </div>
 
                 <div>
                   <label className={labelClass}>Ano</label>
                   <input
-                    className={inputClass}
-                    placeholder="2018"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={vehicleYear}
-                    onChange={(event) => setVehicleYear(event.target.value)}
                   />
                 </div>
 
                 <div>
                   <label className={labelClass}>Placa</label>
                   <input
-                    className={inputClass}
-                    placeholder="ABC1D23"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={vehiclePlate}
-                    onChange={(event) => setVehiclePlate(event.target.value)}
                   />
                 </div>
 
                 <div>
                   <label className={labelClass}>Motor</label>
                   <input
-                    className={inputClass}
-                    placeholder="2.0"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={vehicleMotor}
-                    onChange={(event) => setVehicleMotor(event.target.value)}
                   />
                 </div>
 
                 <div>
                   <label className={labelClass}>Combustível</label>
-                  <select
-                    className={inputClass}
+                  <input
+                    className={readOnlyInputClass}
+                    readOnly
                     value={vehicleFuel}
-                    onChange={(event) => setVehicleFuel(event.target.value)}
-                  >
-                    <option value="" disabled>
-                      Selecione
-                    </option>
-                    <option>Flex</option>
-                    <option>Gasolina</option>
-                    <option>Etanol</option>
-                    <option>Diesel</option>
-                    <option>Elétrico</option>
-                    <option>Híbrido</option>
-                  </select>
+                  />
                 </div>
 
                 <div>
                   <label className={labelClass}>Chassi/VIN opcional</label>
                   <input
-                    className={inputClass}
-                    placeholder="Identificação"
+                    className={readOnlyInputClass}
+                    readOnly
                     value={vehicleVin}
-                    onChange={(event) => setVehicleVin(event.target.value)}
                   />
                 </div>
 
                 <div>
                   <label className={labelClass}>Km atual</label>
                   <input
-                    className={inputClass}
+                    className={readOnlyInputClass}
+                    readOnly
                     inputMode="numeric"
-                    placeholder="000.000"
                     value={vehicleKm}
-                    onChange={(event) => setVehicleKm(event.target.value)}
                   />
                 </div>
               </div>
             </div>
           </div>
         </section>
+        )}
 
+        {activeTab === "overview" && (
         <section className={sectionClass}>
-          <span className="text-sm font-semibold uppercase text-sky-400">
-            Etapa 2
-          </span>
-          <h3 className="mt-1 text-2xl font-bold">
+          <h3 className="text-2xl font-bold">
             Problema relatado pelo cliente
           </h3>
 
@@ -2787,12 +2897,11 @@ export default function OSDetail() {
             onChange={(event) => setProblemReport(event.target.value)}
           />
         </section>
+        )}
 
+        {activeTab === "diagnostico" && (
         <section className={sectionClass}>
-          <span className="text-sm font-semibold uppercase text-sky-400">
-            Etapa 3
-          </span>
-          <h3 className="mt-1 text-2xl font-bold">Diagnóstico da oficina</h3>
+          <h3 className="text-2xl font-bold">Diagnóstico da oficina</h3>
 
           <div className="mt-5 grid gap-5 lg:grid-cols-3">
             <div>
@@ -2829,12 +2938,11 @@ export default function OSDetail() {
             </div>
           </div>
         </section>
+        )}
 
+        {activeTab === "diagnostico" && (
         <section className={sectionClass}>
-          <span className="text-sm font-semibold uppercase text-sky-400">
-            Etapa 4
-          </span>
-          <h3 className="mt-1 text-2xl font-bold">Checklist inicial</h3>
+          <h3 className="text-2xl font-bold">Checklist inicial</h3>
 
           <div className="mt-5 grid gap-0">
             {checklistItems.map((item) => (
@@ -2882,7 +2990,9 @@ export default function OSDetail() {
             ))}
           </div>
         </section>
+        )}
 
+        {activeTab === "diagnostico" && (
         <ServiceOrderPhotosSection
           photos={photos}
           onChange={setPhotos}
@@ -2890,112 +3000,13 @@ export default function OSDetail() {
           labelClass={labelClass}
           inputClass={inputClass}
         />
+        )}
 
+        {activeTab === "orcamento" && (
         <section className={sectionClass}>
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <span className="text-sm font-semibold uppercase text-sky-400">
-                Etapa 5
-              </span>
-              <h3 className="mt-1 text-2xl font-bold">Peças necessárias</h3>
-            </div>
-
-            <button
-              type="button"
-              onClick={addPartLine}
-              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-            >
-              Adicionar peça
-            </button>
-          </div>
-
-          <div className="grid gap-0">
-            {partLines.map((line, index) => {
-              const lineTotal = toNumber(line.quantity) * toNumber(line.unitValue);
-
-              return (
-                <div
-                  key={line.id}
-                  className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(160px,2fr)_100px_130px_130px]"
-                >
-                  <div>
-                    <label className={labelClass}>Peça {index + 1}</label>
-                    <input
-                      className={compactInputClass}
-                      placeholder="Pastilha de freio"
-                      value={line.name}
-                      onChange={(event) =>
-                        updatePartLine(line.id, "name", event.target.value)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>Quantidade</label>
-                    <input
-                      type="number"
-                      min="0"
-                      className={compactInputClass}
-                      value={line.quantity}
-                      onChange={(event) =>
-                        updatePartLine(line.id, "quantity", event.target.value)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>Valor unitário</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      className={compactInputClass}
-                      placeholder="0,00"
-                      value={line.unitValue}
-                      onChange={(event) =>
-                        updatePartLine(line.id, "unitValue", event.target.value)
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <label className={labelClass}>Valor total</label>
-                    <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm font-semibold text-slate-100">
-                      {formatCurrency(lineTotal)}
-                    </div>
-                  </div>
-                  <div className="md:col-span-4">
-                    <button
-                      type="button"
-                      onClick={() => removePartLine(line.id)}
-                      className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
-                    >
-                      Remover peça
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              onClick={addPartLine}
-              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-            >
-              Adicionar peça
-            </button>
-          </div>
-        </section>
-
-        <section className={sectionClass}>
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <span className="text-sm font-semibold uppercase text-sky-400">
-                Etapa 6
-              </span>
-              <h3 className="mt-1 text-2xl font-bold">
+              <h3 className="text-2xl font-bold">
                 Serviços / mão de obra
               </h3>
             </div>
@@ -3057,12 +3068,11 @@ export default function OSDetail() {
             ))}
           </div>
         </section>
+        )}
 
+        {activeTab === "orcamento" && (
         <section className={sectionClass}>
-          <span className="text-sm font-semibold uppercase text-sky-400">
-            Etapa 7
-          </span>
-          <h3 className="mt-1 text-2xl font-bold">Resumo do orçamento</h3>
+          <h3 className="text-2xl font-bold">Resumo do orçamento</h3>
 
           <div className="mt-5 grid gap-6 lg:grid-cols-2">
             <div className="space-y-3">
@@ -3276,7 +3286,9 @@ export default function OSDetail() {
             </div>
           </div>
         </section>
+        )}
 
+        {activeTab === "timeline" && (
         <section className={sectionClass}>
           <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -3298,8 +3310,8 @@ export default function OSDetail() {
               [...timeline]
                 .sort(
                   (a, b) =>
-                    new Date(b.dataHora).getTime() -
-                    new Date(a.dataHora).getTime(),
+                    new Date(a.dataHora).getTime() -
+                    new Date(b.dataHora).getTime(),
                 )
                 .map((event) => (
                   <div
@@ -3342,6 +3354,7 @@ export default function OSDetail() {
             )}
           </div>
         </section>
+        )}
 
         <div className="sticky bottom-0 -mx-2 flex flex-wrap items-center justify-end gap-3 border-t border-slate-800 bg-slate-950/95 px-2 py-4 backdrop-blur">
           {saveMessage && (
@@ -3350,29 +3363,35 @@ export default function OSDetail() {
             </span>
           )}
 
-          <button
-            type="button"
-            onClick={handleOpenQuoteModal}
-            className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-400"
-          >
-            Solicitar cotação
-          </button>
+          {activeTab === "pecas" && (
+            <button
+              type="button"
+              onClick={handleOpenQuoteModal}
+              className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-400"
+            >
+              Solicitar cotação
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
-            className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
-          >
-            Enviar orçamento
-          </button>
+          {activeTab === "orcamento" && (
+            <button
+              type="button"
+              onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
+              className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+            >
+              Enviar orçamento
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={handleGenerateBudget}
-            className="rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-400"
-          >
-            Gerar orçamento
-          </button>
+          {activeTab === "orcamento" && (
+            <button
+              type="button"
+              onClick={handleGenerateBudget}
+              className="rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-400"
+            >
+              Gerar orçamento
+            </button>
+          )}
 
           <button
             type="submit"

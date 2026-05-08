@@ -684,7 +684,9 @@ export default function Compras() {
         <BackButton className="mb-4" />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold">Compras</h2>
+          <h2 className="text-3xl font-bold">
+            Compras — Auditoria e reposição de estoque
+          </h2>
           <p className="mt-2 text-slate-400">
             Solicite, compare e confirme cotações de peças vinculadas às OS.
           </p>

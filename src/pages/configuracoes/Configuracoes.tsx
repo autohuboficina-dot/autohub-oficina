@@ -14,6 +14,10 @@ import {
   type UsuarioSistema,
   type UsuarioStatus,
 } from "../../services/configuracoesService";
+import {
+  getChecklistConfig,
+  saveChecklistConfig,
+} from "../../services/checklistConfigService";
 
 type ConfiguracoesProps = {
   role: UserRole;
@@ -58,6 +62,11 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
   const [editingUsuarioId, setEditingUsuarioId] = useState("");
   const [feedback, setFeedback] = useState("");
   const [configError, setConfigError] = useState("");
+  const [checklistItems, setChecklistItems] = useState<string[]>(() =>
+    getChecklistConfig(),
+  );
+  const [newChecklistItem, setNewChecklistItem] = useState("");
+  const [checklistError, setChecklistError] = useState("");
 
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
@@ -224,6 +233,54 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
     setFeedback("Usuário removido.");
   }
 
+  function isChecklistAdmin() {
+    return localStorage.getItem("autohub:perfil") === "admin";
+  }
+
+  function handleAddChecklistItem() {
+    const item = newChecklistItem.trim();
+
+    if (!item) {
+      setChecklistError("Informe um item para adicionar ao checklist.");
+      return;
+    }
+
+    if (
+      checklistItems.some(
+        (currentItem) => currentItem.toLowerCase() === item.toLowerCase(),
+      )
+    ) {
+      setChecklistError("Este item já existe no checklist.");
+      return;
+    }
+
+    setChecklistItems((currentItems) => [...currentItems, item]);
+    setNewChecklistItem("");
+    setChecklistError("");
+  }
+
+  function handleRemoveChecklistItem(itemToRemove: string) {
+    setChecklistItems((currentItems) =>
+      currentItems.filter((item) => item !== itemToRemove),
+    );
+    setChecklistError("");
+  }
+
+  function handleSaveChecklist() {
+    const normalizedItems = checklistItems
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (normalizedItems.length < 3) {
+      setChecklistError("Mantenha ao menos 3 itens no checklist padrão.");
+      return;
+    }
+
+    setChecklistItems(saveChecklistConfig(normalizedItems));
+    setChecklistError("");
+    setFeedback("Checklist padrão da OS salvo.");
+  }
+
   if (role !== "admin") {
     return (
       <div className="max-w-3xl">
@@ -264,6 +321,67 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
         <div className="rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200">
           {configError}
         </div>
+      )}
+
+      {isChecklistAdmin() && (
+        <section className={sectionClass}>
+          <div className="mb-5">
+            <h3 className="text-xl font-bold">Checklist padrão da OS</h3>
+            <p className="mt-1 text-sm text-slate-400">
+              Este checklist será aplicado em todas as novas OS criadas
+            </p>
+          </div>
+
+          {checklistError && (
+            <div className="mb-4 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200">
+              {checklistError}
+            </div>
+          )}
+
+          <div className="grid gap-3">
+            {checklistItems.map((item) => (
+              <div
+                key={item}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3"
+              >
+                <span className="text-sm font-medium text-slate-100">{item}</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveChecklistItem(item)}
+                  className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                >
+                  Remover
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto]">
+            <input
+              className={inputClass}
+              value={newChecklistItem}
+              onChange={(event) => setNewChecklistItem(event.target.value)}
+              placeholder="Novo item do checklist"
+            />
+            <button
+              type="button"
+              onClick={handleAddChecklistItem}
+              className="rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-400"
+            >
+              Adicionar item
+            </button>
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              onClick={handleSaveChecklist}
+              className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+            >
+              Salvar checklist
+            </button>
+          </div>
+        </section>
       )}
 
       <form className={sectionClass} onSubmit={handleSaveConfig}>
