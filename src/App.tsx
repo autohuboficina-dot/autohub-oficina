@@ -50,7 +50,7 @@ const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
     { label: "Compras", path: "/compras" },
     { label: "Fornecedores", path: "/fornecedores" },
     { label: "Estoque", path: "/estoque" },
-    { label: "Hermes", path: "/sdr", icon: "hermes" },
+    { label: "Hermes IA", path: "/sdr", icon: "hermes" },
     { label: "Configurações", path: "/configuracoes" },
   ],
   mecanico: [
@@ -65,7 +65,7 @@ const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
     { label: "Veículos", path: "/veiculos" },
     { label: "Ordens de Serviço", path: "/os" },
     { label: "Orçamentos", path: "/orcamentos" },
-    { label: "Hermes", path: "/sdr", icon: "hermes" },
+    { label: "Hermes IA", path: "/sdr", icon: "hermes" },
   ],
   compras: [
     { label: "Dashboard", path: "/dashboard" },
