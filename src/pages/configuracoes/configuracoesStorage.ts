@@ -11,6 +11,7 @@ export type OficinaConfiguracoes = {
   chavePix: string;
   textoPadraoOrcamento: string;
   politicaEntradaSinal: string;
+  markupPecas: number;
   regrasPagamento: RegrasPagamento;
 };
 
@@ -59,6 +60,7 @@ export const defaultOficinaConfiguracoes: OficinaConfiguracoes = {
     "Revise os itens do orçamento e responda pelo link enviado pela oficina.",
   politicaEntradaSinal:
     "Quando houver entrada/sinal, o serviço só será iniciado após confirmação do pagamento.",
+  markupPecas: 0,
   regrasPagamento: {
     pix: { tipo: "percentual", valor: 0 },
     dinheiro: { tipo: "percentual", valor: 0 },
@@ -82,6 +84,7 @@ function normalizeConfig(config: Partial<OficinaConfiguracoes>): OficinaConfigur
   return {
     ...defaultOficinaConfiguracoes,
     ...config,
+    markupPecas: Math.min(Math.max(Number(config.markupPecas || 0), 0), 200),
     regrasPagamento: {
       pix: {
         tipo: regrasPagamento.pix?.tipo === "valor" ? "valor" : "percentual",

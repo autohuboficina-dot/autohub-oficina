@@ -35,6 +35,7 @@ type OrdemServicoSupabaseRow = {
     email: string | null;
   } | null;
   veiculos?: {
+    tipo_veiculo?: string | null;
     marca: string | null;
     modelo: string | null;
     ano: string | null;
@@ -161,6 +162,7 @@ function createEmptyOrderFromSupabase(row: OrdemServicoSupabaseRow): ServiceOrde
     clienteNome,
     clienteTelefone,
     veiculoId: row.veiculo_id,
+    veiculoTipo: veiculo?.tipo_veiculo ?? "Carro",
     veiculoMarca: veiculo?.marca ?? "",
     veiculoModelo: veiculo?.modelo ?? "",
     veiculoAno: veiculo?.ano ?? "",
@@ -176,6 +178,7 @@ function createEmptyOrderFromSupabase(row: OrdemServicoSupabaseRow): ServiceOrde
       email: row.clientes?.email ?? "",
     },
     veiculoDados: {
+      tipo_veiculo: veiculo?.tipo_veiculo ?? "Carro",
       marca: veiculo?.marca ?? "",
       modelo: veiculo?.modelo ?? "",
       ano: veiculo?.ano ?? "",
@@ -704,7 +707,7 @@ export async function getStoredOrdersSupabase(oficinaId: string) {
   const { data, error } = await supabase
     .from("ordens_servico")
     .select(
-      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
+      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(tipo_veiculo, marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
     )
     .eq("oficina_id", oficinaId)
     .order("created_at", { ascending: false })
@@ -738,7 +741,7 @@ export async function getServiceOrderSupabase(oficinaId: string, id: string) {
   let query = supabase
     .from("ordens_servico")
     .select(
-      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
+      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(tipo_veiculo, marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
     )
     .eq("oficina_id", oficinaId);
 
@@ -822,7 +825,7 @@ export async function createServiceOrderSupabase(
     .from("ordens_servico")
     .insert(mapOrderToSupabase(oficinaId, order))
     .select(
-      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
+      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(tipo_veiculo, marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
     )
     .single<OrdemServicoSupabaseRow>();
 
@@ -898,7 +901,7 @@ export async function updateServiceOrderSupabase(
     .eq("id", order.id)
     .eq("version", expectedVersion)
     .select(
-      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
+      "id, cliente_id, veiculo_id, codigo, version, status, problema_relatado, observacao, diagnostico, created_at, updated_at, clientes(nome, telefone, documento, email), veiculos(tipo_veiculo, marca, modelo, ano, motor, combustivel, placa, chassi_vin)",
     )
     .maybeSingle<OrdemServicoSupabaseRow>();
 

@@ -57,6 +57,9 @@ type PartLine = {
   quantity: string;
   unitValue: string;
   compraId?: string;
+  supplierCost?: number;
+  markupPercent?: number;
+  markedUnitValue?: number;
   generatedFromChecklist?: string;
 };
 
@@ -118,6 +121,16 @@ type DetailTabId =
 
 type StoredPerfil = "admin" | "atendimento" | "mecanico" | "compras" | "financeiro";
 
+type ServicoCatalogo = {
+  id: string;
+  nome: string;
+  valor_padrao: number;
+  categoria: string;
+  ativo: boolean;
+};
+
+const SERVICOS_STORAGE_KEY = "autohub:servicos-catalogo";
+
 const detailTabs: { id: DetailTabId; label: string }[] = [
   { id: "overview", label: "Visão Geral" },
   { id: "diagnostico", label: "Diagnóstico" },
@@ -144,6 +157,30 @@ function getStoredPerfil(): StoredPerfil {
   }
 
   return "atendimento";
+}
+
+function getServicosCatalogo(): ServicoCatalogo[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SERVICOS_STORAGE_KEY) ?? "[]") as ServicoCatalogo[];
+    return Array.isArray(parsed)
+      ? parsed.filter((servico) => servico.ativo && servico.nome.trim())
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function getVehicleTypeBadge(tipo: string) {
+  const normalizedTipo = tipo || "Carro";
+  const iconByType: Record<string, string> = {
+    Carro: "🚗",
+    Moto: "🏍️",
+    Caminhão: "🚚",
+    Van: "🚐",
+    Outro: "🚘",
+  };
+
+  return `${iconByType[normalizedTipo] ?? "🚘"} ${normalizedTipo}`;
 }
 
 function getDefaultDetailTab(): DetailTabId {
@@ -342,6 +379,9 @@ function createPartLines(order?: ServiceOrder): PartLine[] {
     quantity: String(part.quantidade),
     unitValue: String(part.valorUnitario),
     compraId: part.compraId,
+    supplierCost: part.custoFornecedorPeca,
+    markupPercent: part.markupPecasAplicado,
+    markedUnitValue: part.valorComMarkup,
     generatedFromChecklist: part.origemChecklist,
   }));
 }
@@ -428,6 +468,7 @@ type StoredVehicleObject = Partial<{
   chassiVin: string;
   chassi: string;
   kmAtual: string;
+  tipo_veiculo: string;
 }>;
 
 function isStoredVehicleObject(value: unknown): value is StoredVehicleObject {
@@ -477,6 +518,7 @@ function getVehicleField(
     chassiVin: order.veiculoChassi,
     chassi: order.veiculoChassi,
     kmAtual: order.veiculoDados.kmAtual,
+    tipo_veiculo: order.veiculoTipo || order.veiculoDados.tipo_veiculo,
   };
 
   return String(vehicleObjectValue || normalizedValue || flatValueByField[field] || "");
@@ -488,6 +530,10 @@ export default function OSDetail() {
   const { oficina_id } = useAuth();
   const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
+  const [servicosCatalogo] = useState<ServicoCatalogo[]>(() =>
+    getServicosCatalogo(),
+  );
+  const [storedPerfil] = useState<StoredPerfil>(() => getStoredPerfil());
   const [order, setOrder] = useState<ServiceOrder | undefined>(() =>
     getStoredOrders().find(
       (storedOrder) => storedOrder.codigo === id || storedOrder.id === id,
@@ -514,6 +560,9 @@ export default function OSDetail() {
   const [clientEmail, setClientEmail] = useState(order?.clienteDados.email || "");
   const [selectedClienteId, setSelectedClienteId] = useState(order?.clienteId || "");
   const [selectedVehicleId, setSelectedVehicleId] = useState(order?.veiculoId || "");
+  const [vehicleType, setVehicleType] = useState(
+    getVehicleField(order, "tipo_veiculo") || "Carro",
+  );
   const [vehicleBrand, setVehicleBrand] = useState(getVehicleField(order, "marca"));
   const [vehicleModel, setVehicleModel] = useState(getVehicleField(order, "modelo"));
   const [vehicleYear, setVehicleYear] = useState(getVehicleField(order, "ano"));
@@ -701,6 +750,7 @@ export default function OSDetail() {
       setClientEmail(order.clienteDados.email || "");
       setSelectedClienteId(order.clienteId || "");
       setSelectedVehicleId(order.veiculoId || "");
+      setVehicleType(getVehicleField(order, "tipo_veiculo") || "Carro");
       setVehicleBrand(getVehicleField(order, "marca"));
       setVehicleModel(getVehicleField(order, "modelo"));
       setVehicleYear(getVehicleField(order, "ano"));
@@ -838,6 +888,7 @@ export default function OSDetail() {
       placa: vehiclePlate,
       clienteNome: clientName,
       clienteTelefone: onlyDigits(clientPhone),
+      veiculoTipo: vehicleType,
       veiculoMarca: vehicleBrand,
       veiculoModelo: vehicleModel,
       veiculoAno: vehicleYear,
@@ -853,6 +904,7 @@ export default function OSDetail() {
       },
       veiculoDados: {
         ...order.veiculoDados,
+        tipo_veiculo: vehicleType,
         marca: vehicleBrand,
         modelo: vehicleModel,
         ano: vehicleYear,
@@ -869,6 +921,9 @@ export default function OSDetail() {
         valorUnitario: toNumber(part.unitValue),
         valorTotal: toNumber(part.quantity) * toNumber(part.unitValue),
         compraId: part.compraId,
+        custoFornecedorPeca: part.supplierCost,
+        markupPecasAplicado: part.markupPercent,
+        valorComMarkup: part.markedUnitValue,
         origemChecklist: part.generatedFromChecklist,
       })),
       servicosMaoDeObra: laborLines.map((line) => ({
@@ -902,6 +957,7 @@ export default function OSDetail() {
     paymentMethod,
     status,
     totals,
+    vehicleType,
     vehicleBrand,
     vehicleFuel,
     vehicleKm,
@@ -1056,6 +1112,28 @@ export default function OSDetail() {
     setLaborLines((lines) =>
       lines.map((line) =>
         line.id === lineId ? { ...line, [field]: value } : line,
+      ),
+    );
+  }
+
+  function selectCatalogService(lineId: number, servicoId: string) {
+    const servico = servicosCatalogo.find(
+      (currentServico) => currentServico.id === servicoId,
+    );
+
+    if (!servico) {
+      return;
+    }
+
+    setLaborLines((lines) =>
+      lines.map((line) =>
+        line.id === lineId
+          ? {
+              ...line,
+              service: servico.nome,
+              value: String(servico.valor_padrao || 0),
+            }
+          : line,
       ),
     );
   }
@@ -1602,16 +1680,24 @@ export default function OSDetail() {
               return part;
             }
 
-            const valorUnitario = Number(itemResponse.preco || 0);
+            const custoFornecedor = Number(itemResponse.preco || 0);
+            const markupPecas = Number(oficinaConfig.markupPecas || 0);
+            const valorUnitario =
+              markupPecas > 0
+                ? custoFornecedor * (1 + markupPecas / 100)
+                : custoFornecedor;
 
             return {
               ...part,
               valorUnitario,
               valorTotal: valorUnitario * Number(part.quantidade || 1),
               compraId: cotacao.id,
+              custoFornecedorPeca: custoFornecedor,
+              markupPecasAplicado: markupPecas,
+              valorComMarkup: valorUnitario,
               cotacaoPecaId: cotacaoPart.id,
               cotacaoFornecedorEscolhido: response.fornecedorNome,
-              cotacaoPrecoEscolhido: valorUnitario,
+              cotacaoPrecoEscolhido: custoFornecedor,
               cotacaoMarcaEscolhida: itemResponse.marca,
               cotacaoObservacaoEscolhida: itemResponse.observacaoFornecedor,
               cotacaoDataEscolha: nextChoice.dataEscolha,
@@ -1724,6 +1810,9 @@ export default function OSDetail() {
         valorUnitario,
         valorTotal: quantidade * valorUnitario,
         compraId: line.compraId,
+        custoFornecedorPeca: line.supplierCost ?? existingPart?.custoFornecedorPeca,
+        markupPecasAplicado: line.markupPercent ?? existingPart?.markupPecasAplicado,
+        valorComMarkup: line.markedUnitValue ?? existingPart?.valorComMarkup,
         origemChecklist: line.generatedFromChecklist,
       };
     });
@@ -1774,6 +1863,7 @@ export default function OSDetail() {
       clienteNome: clientName.trim(),
       clienteTelefone: clientPhoneDigits,
       veiculoId: selectedVehicleId || order.veiculoId,
+      veiculoTipo: vehicleType,
       veiculoMarca: vehicleBrand.trim(),
       veiculoModelo: vehicleModel.trim(),
       veiculoAno: vehicleYear.trim(),
@@ -1789,6 +1879,7 @@ export default function OSDetail() {
         email: clientEmail.trim(),
       },
       veiculoDados: {
+        tipo_veiculo: vehicleType,
         marca: vehicleBrand.trim(),
         modelo: vehicleModel.trim(),
         ano: vehicleYear.trim(),
@@ -1879,6 +1970,9 @@ export default function OSDetail() {
               valorUnitario,
               valorTotal: quantidade * valorUnitario,
               compraId: line.compraId,
+              custoFornecedorPeca: line.supplierCost,
+              markupPecasAplicado: line.markupPercent,
+              valorComMarkup: line.markedUnitValue,
               origemChecklist: line.generatedFromChecklist,
             };
           }),
@@ -2381,6 +2475,15 @@ export default function OSDetail() {
                         updatePartLine(line.id, "unitValue", event.target.value)
                       }
                     />
+                    {(storedPerfil === "admin" || storedPerfil === "compras") &&
+                      line.supplierCost !== undefined &&
+                      Number(line.markupPercent || 0) > 0 && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Custo: {formatCurrency(line.supplierCost)} + markup de{" "}
+                          {line.markupPercent}% ={" "}
+                          {formatCurrency(line.markedUnitValue ?? toNumber(line.unitValue))}
+                        </p>
+                      )}
                   </div>
 
                   <div>
@@ -3005,9 +3108,25 @@ export default function OSDetail() {
             </div>
 
             <div>
-              <h4 className={subTitleClass}>Dados do veículo</h4>
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-2">
+                <h4 className="text-base font-semibold text-sky-300">
+                  Dados do veículo
+                </h4>
+                <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200 ring-1 ring-slate-700">
+                  {getVehicleTypeBadge(vehicleType)}
+                </span>
+              </div>
 
               <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <label className={labelClass}>Tipo de veículo</label>
+                  <input
+                    className={readOnlyInputClass}
+                    readOnly
+                    value={vehicleType}
+                  />
+                </div>
+
                 <div>
                   <label className={labelClass}>Marca</label>
                   <input
@@ -3230,10 +3349,28 @@ export default function OSDetail() {
             {laborLines.map((line) => (
               <div
                 key={line.id}
-                className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(150px,1.2fr)_minmax(180px,2fr)_130px]"
+                className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(170px,1fr)_minmax(150px,1.2fr)_minmax(180px,2fr)_130px]"
               >
                 <div>
-                  <label className={labelClass}>Serviço</label>
+                  <label className={labelClass}>Selecionar do catálogo</label>
+                  <select
+                    className={compactInputClass}
+                    value=""
+                    onChange={(event) =>
+                      selectCatalogService(line.id, event.target.value)
+                    }
+                  >
+                    <option value="">Serviço personalizado</option>
+                    {servicosCatalogo.map((servico) => (
+                      <option key={servico.id} value={servico.id}>
+                        {servico.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass}>Serviço personalizado</label>
                   <input
                     className={compactInputClass}
                     placeholder="Troca de pastilhas"

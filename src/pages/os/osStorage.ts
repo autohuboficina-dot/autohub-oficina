@@ -55,6 +55,9 @@ export type ServiceOrderPart = {
   valorUnitario: number;
   valorTotal: number;
   compraId?: string;
+  custoFornecedorPeca?: number;
+  markupPecasAplicado?: number;
+  valorComMarkup?: number;
   origemChecklist?: string;
   cotacaoPecaId?: string;
   cotacaoFornecedorEscolhido?: string;
@@ -141,6 +144,7 @@ export type ServiceOrder = {
   clienteNome: string;
   clienteTelefone: string;
   veiculoId: string;
+  veiculoTipo: string;
   veiculoMarca: string;
   veiculoModelo: string;
   veiculoAno: string;
@@ -156,6 +160,7 @@ export type ServiceOrder = {
     email: string;
   };
   veiculoDados: {
+    tipo_veiculo: string;
     marca: string;
     modelo: string;
     ano: string;
@@ -487,6 +492,7 @@ export const exampleOrders: ServiceOrder[] = [
     clienteNome: "Carlos Henrique",
     clienteTelefone: "(11) 99999-9999",
     veiculoId: "",
+    veiculoTipo: "Carro",
     veiculoMarca: "Honda",
     veiculoModelo: "Civic",
     veiculoAno: "2018",
@@ -505,6 +511,7 @@ export const exampleOrders: ServiceOrder[] = [
       email: "",
     },
     veiculoDados: {
+      tipo_veiculo: "Carro",
       marca: "Honda",
       modelo: "Civic",
       ano: "2018",
@@ -587,6 +594,7 @@ export const exampleOrders: ServiceOrder[] = [
     clienteNome: "Mariana Souza",
     clienteTelefone: "(21) 98888-7777",
     veiculoId: "",
+    veiculoTipo: "Carro",
     veiculoMarca: "Fiat",
     veiculoModelo: "Argo",
     veiculoAno: "2021",
@@ -605,6 +613,7 @@ export const exampleOrders: ServiceOrder[] = [
       email: "",
     },
     veiculoDados: {
+      tipo_veiculo: "Carro",
       marca: "Fiat",
       modelo: "Argo",
       ano: "2021",
@@ -743,6 +752,7 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
     clienteTelefone:
       order.clienteTelefone ?? order.clienteDados?.telefone ?? order.telefone,
     veiculoId: order.veiculoId ?? "",
+    veiculoTipo: order.veiculoTipo ?? order.veiculoDados?.tipo_veiculo ?? "Carro",
     veiculoMarca: order.veiculoMarca ?? order.veiculoDados?.marca ?? "",
     veiculoModelo: order.veiculoModelo ?? order.veiculoDados?.modelo ?? order.veiculo,
     veiculoAno: order.veiculoAno ?? order.veiculoDados?.ano ?? "",
@@ -758,7 +768,13 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
       cnpj: "",
       email: "",
     },
-    veiculoDados: order.veiculoDados ?? {
+    veiculoDados: order.veiculoDados
+      ? {
+          ...order.veiculoDados,
+          tipo_veiculo: order.veiculoDados.tipo_veiculo ?? order.veiculoTipo ?? "Carro",
+        }
+      : {
+      tipo_veiculo: order.veiculoTipo ?? "Carro",
       marca: "",
       modelo: order.veiculo,
       ano: "",

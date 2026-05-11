@@ -454,6 +454,7 @@ export default function OSNew() {
       clienteNome: selectedCliente.nome,
       clienteTelefone,
       veiculoId: selectedVehicle.id,
+      veiculoTipo: selectedVehicle.tipo_veiculo || "Carro",
       veiculoMarca: selectedVehicle.marca,
       veiculoModelo: selectedVehicle.modelo,
       veiculoAno: selectedVehicle.ano,
@@ -469,6 +470,7 @@ export default function OSNew() {
         email: selectedCliente.email,
       },
       veiculoDados: {
+        tipo_veiculo: selectedVehicle.tipo_veiculo || "Carro",
         marca: selectedVehicle.marca,
         modelo: selectedVehicle.modelo,
         ano: selectedVehicle.ano,

@@ -3,9 +3,11 @@ import {
   getClientes,
   saveCliente,
   updateCliente,
+  TIPOS_VEICULO,
   type Cliente,
   type ClienteTipo,
   type ClienteVeiculo,
+  type TipoVeiculo,
 } from "../pages/clientes/clientesStorage";
 import { supabase } from "../lib/supabase";
 
@@ -25,6 +27,7 @@ type ClienteSupabaseRow = {
 type VeiculoSupabaseRow = {
   id: string;
   cliente_id: string;
+  tipo_veiculo: string | null;
   marca: string | null;
   modelo: string;
   ano: string | null;
@@ -60,8 +63,13 @@ function logSupabaseFallback(scope: string, error: unknown) {
 }
 
 function mapVeiculoFromSupabase(row: VeiculoSupabaseRow): ClienteVeiculo {
+  const tipoVeiculo = TIPOS_VEICULO.includes(row.tipo_veiculo as TipoVeiculo)
+    ? (row.tipo_veiculo as TipoVeiculo)
+    : "Carro";
+
   return {
     id: row.id,
+    tipo_veiculo: tipoVeiculo,
     marca: row.marca ?? "",
     modelo: row.modelo ?? "",
     ano: row.ano ?? "",
@@ -117,6 +125,7 @@ function mapVeiculoToSupabase(
   return {
     oficina_id: oficinaId,
     cliente_id: clienteId,
+    tipo_veiculo: veiculo.tipo_veiculo || "Carro",
     marca: veiculo.marca,
     modelo: veiculo.modelo,
     ano: veiculo.ano,
@@ -136,7 +145,7 @@ async function getVeiculosByClienteIds(clienteIds: string[]) {
   const { data, error } = await supabase
     .from("veiculos")
     .select(
-      "id, cliente_id, marca, modelo, ano, motor, combustivel, placa, chassi_vin, observacoes, created_at, updated_at",
+      "id, cliente_id, tipo_veiculo, marca, modelo, ano, motor, combustivel, placa, chassi_vin, observacoes, created_at, updated_at",
     )
     .in("cliente_id", clienteIds)
     .returns<VeiculoSupabaseRow[]>();
@@ -162,7 +171,7 @@ async function saveVeiculosSupabase(
   const { data: storedVeiculos, error: storedError } = await client
     .from("veiculos")
     .select(
-      "id, cliente_id, marca, modelo, ano, motor, combustivel, placa, chassi_vin, observacoes, created_at, updated_at",
+      "id, cliente_id, tipo_veiculo, marca, modelo, ano, motor, combustivel, placa, chassi_vin, observacoes, created_at, updated_at",
     )
     .eq("oficina_id", oficinaId)
     .eq("cliente_id", clienteId)
@@ -220,7 +229,7 @@ async function saveVeiculosSupabase(
   const { data, error } = await client
     .from("veiculos")
     .select(
-      "id, cliente_id, marca, modelo, ano, motor, combustivel, placa, chassi_vin, observacoes, created_at, updated_at",
+      "id, cliente_id, tipo_veiculo, marca, modelo, ano, motor, combustivel, placa, chassi_vin, observacoes, created_at, updated_at",
     )
     .eq("oficina_id", oficinaId)
     .eq("cliente_id", clienteId)
@@ -245,6 +254,7 @@ export {
   deleteCliente,
   getClientes,
   saveCliente,
+  TIPOS_VEICULO,
   updateCliente,
 } from "../pages/clientes/clientesStorage";
 

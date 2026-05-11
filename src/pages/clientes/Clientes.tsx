@@ -6,6 +6,7 @@ import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
   createClienteVeiculoId,
+  TIPOS_VEICULO,
   getClientes,
   getClientesSupabase,
   saveClienteSupabase,
@@ -30,6 +31,7 @@ type ClienteForm = {
 function createEmptyVehicle(): ClienteVeiculo {
   return {
     id: createClienteVeiculoId(),
+    tipo_veiculo: "Carro",
     marca: "",
     modelo: "",
     ano: "",
@@ -299,6 +301,7 @@ export default function Clientes() {
 
     const veiculos = form.veiculos.map((veiculo) => ({
       ...veiculo,
+      tipo_veiculo: veiculo.tipo_veiculo || "Carro",
       marca: veiculo.marca.trim(),
       modelo: veiculo.modelo.trim(),
       ano: veiculo.ano.trim(),
@@ -575,6 +578,25 @@ export default function Clientes() {
                       </div>
 
                       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                        <div>
+                          <label className={labelClass}>Tipo de veículo</label>
+                          <select
+                            className={inputClass}
+                            value={veiculo.tipo_veiculo || "Carro"}
+                            onChange={(event) =>
+                              updateVehicle(
+                                veiculo.id,
+                                "tipo_veiculo",
+                                event.target.value,
+                              )
+                            }
+                          >
+                            {TIPOS_VEICULO.map((tipo) => (
+                              <option key={tipo}>{tipo}</option>
+                            ))}
+                          </select>
+                        </div>
+
                         <div>
                           <label className={labelClass}>Marca</label>
                           <input

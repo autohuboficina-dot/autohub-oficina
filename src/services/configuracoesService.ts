@@ -26,6 +26,7 @@ type OficinaSupabaseRow = {
   chave_pix: string | null;
   texto_padrao_orcamento: string | null;
   politica_entrada_sinal: string | null;
+  markup_pecas?: number | null;
   regras_pagamento: OficinaConfiguracoes["regrasPagamento"] | null;
 };
 
@@ -111,6 +112,7 @@ function mapOficinaFromSupabase(row: OficinaSupabaseRow): OficinaConfiguracoes {
     politicaEntradaSinal:
       row.politica_entrada_sinal ??
       defaultOficinaConfiguracoes.politicaEntradaSinal,
+    markupPecas: row.markup_pecas ?? defaultOficinaConfiguracoes.markupPecas,
     regrasPagamento:
       row.regras_pagamento ?? defaultOficinaConfiguracoes.regrasPagamento,
   });
@@ -128,6 +130,7 @@ function mapOficinaToSupabase(config: OficinaConfiguracoes) {
     chave_pix: config.chavePix,
     texto_padrao_orcamento: config.textoPadraoOrcamento,
     politica_entrada_sinal: config.politicaEntradaSinal,
+    markup_pecas: config.markupPecas,
     regras_pagamento: config.regrasPagamento,
   };
 }
@@ -142,7 +145,7 @@ export async function getConfiguracoesOficinaSupabase(oficinaId: string) {
   const { data, error } = await supabase
     .from("oficinas")
     .select(
-      "nome, cnpj, whatsapp, email, endereco, cidade, logo_url, chave_pix, texto_padrao_orcamento, politica_entrada_sinal, regras_pagamento",
+      "nome, cnpj, whatsapp, email, endereco, cidade, logo_url, chave_pix, texto_padrao_orcamento, politica_entrada_sinal, markup_pecas, regras_pagamento",
     )
     .eq("id", oficinaId)
     .maybeSingle<OficinaSupabaseRow>();
@@ -170,7 +173,7 @@ export async function saveConfiguracoesOficinaSupabase(
     .update(mapOficinaToSupabase(normalizedConfig))
     .eq("id", oficinaId)
     .select(
-      "nome, cnpj, whatsapp, email, endereco, cidade, logo_url, chave_pix, texto_padrao_orcamento, politica_entrada_sinal, regras_pagamento",
+      "nome, cnpj, whatsapp, email, endereco, cidade, logo_url, chave_pix, texto_padrao_orcamento, politica_entrada_sinal, markup_pecas, regras_pagamento",
     )
     .single<OficinaSupabaseRow>();
 

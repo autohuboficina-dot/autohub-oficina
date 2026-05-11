@@ -1,5 +1,16 @@
+export type TipoVeiculo = "Carro" | "Moto" | "Caminhão" | "Van" | "Outro";
+
+export const TIPOS_VEICULO: TipoVeiculo[] = [
+  "Carro",
+  "Moto",
+  "Caminhão",
+  "Van",
+  "Outro",
+];
+
 export type ClienteVeiculo = {
   id: string;
+  tipo_veiculo: TipoVeiculo;
   marca: string;
   modelo: string;
   ano: string;
@@ -39,12 +50,18 @@ function createClienteId() {
 
 function normalizeCliente(cliente: Cliente): Cliente {
   const veiculos = Array.isArray(cliente.veiculos) ? cliente.veiculos : [];
+  const normalizedVeiculos = veiculos.map((veiculo) => ({
+    ...veiculo,
+    tipo_veiculo: TIPOS_VEICULO.includes(veiculo.tipo_veiculo)
+      ? veiculo.tipo_veiculo
+      : "Carro",
+  }));
 
   return {
     ...cliente,
     tipo: cliente.tipo || "Pessoa física",
-    veiculos,
-    quantidadeVeiculos: veiculos.length,
+    veiculos: normalizedVeiculos,
+    quantidadeVeiculos: normalizedVeiculos.length,
     criadoEm: cliente.criadoEm || new Date().toISOString(),
     atualizadoEm: cliente.atualizadoEm || new Date().toISOString(),
   };

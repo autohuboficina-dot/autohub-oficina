@@ -23,12 +23,111 @@ type ConfiguracoesProps = {
   role: UserRole;
 };
 
+type ConfigTabId =
+  | "oficina"
+  | "checklist"
+  | "servicos"
+  | "pagamentos"
+  | "usuarios"
+  | "feedback";
+
 type UsuarioFormState = {
   nome: string;
   email: string;
   perfil: UserRole;
   status: UsuarioStatus;
 };
+
+type ServicoCatalogo = {
+  id: string;
+  nome: string;
+  valor_padrao: number;
+  categoria:
+    | "Mecânica"
+    | "Elétrica"
+    | "Funilaria"
+    | "Suspensão"
+    | "Freios"
+    | "Revisão"
+    | "Outros";
+  ativo: boolean;
+};
+
+type FeedbackItem = {
+  id: string;
+  tipo: "Sugestão de melhoria" | "Reportar problema" | "Nova funcionalidade";
+  descricao: string;
+  avaliacao: number;
+  oficina_nome: string;
+  created_at: string;
+};
+
+const configTabs: { id: ConfigTabId; label: string }[] = [
+  { id: "oficina", label: "Oficina" },
+  { id: "checklist", label: "Checklist" },
+  { id: "servicos", label: "Serviços" },
+  { id: "pagamentos", label: "Pagamentos" },
+  { id: "usuarios", label: "Usuários" },
+  { id: "feedback", label: "Feedback" },
+];
+
+const serviceCategories: ServicoCatalogo["categoria"][] = [
+  "Mecânica",
+  "Elétrica",
+  "Funilaria",
+  "Suspensão",
+  "Freios",
+  "Revisão",
+  "Outros",
+];
+
+const SERVICOS_STORAGE_KEY = "autohub:servicos-catalogo";
+const FEEDBACK_STORAGE_KEY = "autohub:feedbacks";
+
+function createLocalId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getServicosCatalogo(): ServicoCatalogo[] {
+  const stored = localStorage.getItem(SERVICOS_STORAGE_KEY);
+
+  if (!stored) {
+    return [
+      "Alinhamento",
+      "Balanceamento",
+      "Troca de óleo",
+      "Revisão completa",
+      "Troca de pastilha de freio",
+    ].map((nome) => ({
+      id: createLocalId("SRV"),
+      nome,
+      categoria: "Mecânica",
+      valor_padrao: 0,
+      ativo: true,
+    }));
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as ServicoCatalogo[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveServicosCatalogo(servicos: ServicoCatalogo[]) {
+  localStorage.setItem(SERVICOS_STORAGE_KEY, JSON.stringify(servicos));
+  return servicos;
+}
+
+function getFeedbacks(): FeedbackItem[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FEEDBACK_STORAGE_KEY) ?? "[]") as FeedbackItem[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 const initialUsuarioForm: UsuarioFormState = {
   nome: "",
@@ -47,6 +146,7 @@ const permissionLabels: Record<UserRole, string> = {
 
 export default function Configuracoes({ role }: ConfiguracoesProps) {
   const { oficina_id } = useAuth();
+  const [activeTab, setActiveTab] = useState<ConfigTabId>("oficina");
   const [config, setConfig] = useState<OficinaConfiguracoes>(() => {
     const storedConfig = getConfiguracoesOficina();
 
@@ -67,6 +167,20 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
   );
   const [newChecklistItem, setNewChecklistItem] = useState("");
   const [checklistError, setChecklistError] = useState("");
+  const [servicos, setServicos] = useState<ServicoCatalogo[]>(() =>
+    getServicosCatalogo(),
+  );
+  const [servicoForm, setServicoForm] = useState({
+    nome: "",
+    categoria: "Mecânica" as ServicoCatalogo["categoria"],
+    valor_padrao: "",
+  });
+  const [feedbackForm, setFeedbackForm] = useState({
+    tipo: "Sugestão de melhoria" as FeedbackItem["tipo"],
+    descricao: "",
+    avaliacao: 5,
+  });
+  const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>(() => getFeedbacks());
 
   const inputClass =
     "w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none transition focus:border-sky-500";
@@ -107,7 +221,10 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
     };
   }, [oficina_id]);
 
-  function updateConfigField(field: keyof OficinaConfiguracoes, value: string) {
+  function updateConfigField(
+    field: keyof OficinaConfiguracoes,
+    value: string | number,
+  ) {
     setConfig((currentConfig) => ({
       ...currentConfig,
       [field]: value,
@@ -281,6 +398,62 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
     setFeedback("Checklist padrão da OS salvo.");
   }
 
+  function handleAddServico(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!servicoForm.nome.trim()) {
+      setFeedback("Informe o nome do serviço.");
+      return;
+    }
+
+    setServicos((currentServicos) => [
+      ...currentServicos,
+      {
+        id: createLocalId("SRV"),
+        nome: servicoForm.nome.trim(),
+        categoria: servicoForm.categoria,
+        valor_padrao: Number(servicoForm.valor_padrao || 0),
+        ativo: true,
+      },
+    ]);
+    setServicoForm({ nome: "", categoria: "Mecânica", valor_padrao: "" });
+  }
+
+  function handleSaveServicos() {
+    setServicos(saveServicosCatalogo(servicos));
+    setFeedback("Catálogo de serviços salvo.");
+  }
+
+  function handleSubmitFeedback(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (feedbackForm.descricao.trim().length < 20) {
+      setFeedback("Descreva seu feedback com pelo menos 20 caracteres.");
+      return;
+    }
+
+    const nextFeedbacks = [
+      {
+        id: createLocalId("FDB"),
+        tipo: feedbackForm.tipo,
+        descricao: feedbackForm.descricao.trim(),
+        avaliacao: feedbackForm.avaliacao,
+        oficina_nome: config.nomeOficina,
+        created_at: new Date().toISOString(),
+      },
+      ...feedbacks,
+    ];
+
+    localStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(nextFeedbacks));
+    setFeedbacks(nextFeedbacks);
+    setFeedbackForm({
+      tipo: "Sugestão de melhoria",
+      descricao: "",
+      avaliacao: 5,
+    });
+    setFeedback("Obrigado! Seu feedback foi registrado.");
+  }
+
   if (role !== "admin") {
     return (
       <div className="max-w-3xl">
@@ -323,7 +496,24 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
         </div>
       )}
 
-      {isChecklistAdmin() && (
+      <div className="flex gap-2 overflow-x-auto border-b border-slate-800">
+        {configTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${
+              activeTab === tab.id
+                ? "border-sky-400 bg-slate-900 text-sky-100"
+                : "border-transparent text-slate-400 hover:bg-slate-900/70 hover:text-slate-200"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "checklist" && isChecklistAdmin() && (
         <section className={sectionClass}>
           <div className="mb-5">
             <h3 className="text-xl font-bold">Checklist padrão da OS</h3>
@@ -384,6 +574,7 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
         </section>
       )}
 
+      {activeTab === "oficina" && (
       <form className={sectionClass} onSubmit={handleSaveConfig}>
         <div className="mb-5">
           <h3 className="text-xl font-bold">Configurações da oficina</h3>
@@ -476,6 +667,25 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
               }
             />
           </div>
+
+          <div>
+            <label className={labelClass}>Markup padrão de peças (%)</label>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              max="200"
+              placeholder="0"
+              value={config.markupPecas}
+              onChange={(event) =>
+                updateConfigField("markupPecas", Number(event.target.value || 0))
+              }
+            />
+            <p className="mt-2 text-xs text-slate-500">
+              Percentual adicionado automaticamente sobre o custo das peças ao
+              confirmar uma compra. Ex: 30 = 30% sobre o custo.
+            </p>
+          </div>
         </div>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-2">
@@ -513,7 +723,148 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
           </button>
         </div>
       </form>
+      )}
 
+      {activeTab === "servicos" && (
+      <section className={sectionClass}>
+        <div className="mb-5">
+          <h3 className="text-xl font-bold">Catálogo de serviços</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Cadastre os serviços que sua oficina oferece. Eles aparecerão como
+            opções ao adicionar serviços em uma OS.
+          </p>
+        </div>
+
+        <form className="mb-6 grid gap-4 md:grid-cols-[1fr_180px_160px_auto]" onSubmit={handleAddServico}>
+          <div>
+            <label className={labelClass}>Nome do serviço</label>
+            <input
+              className={inputClass}
+              value={servicoForm.nome}
+              onChange={(event) =>
+                setServicoForm((currentForm) => ({
+                  ...currentForm,
+                  nome: event.target.value,
+                }))
+              }
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Categoria</label>
+            <select
+              className={inputClass}
+              value={servicoForm.categoria}
+              onChange={(event) =>
+                setServicoForm((currentForm) => ({
+                  ...currentForm,
+                  categoria: event.target.value as ServicoCatalogo["categoria"],
+                }))
+              }
+            >
+              {serviceCategories.map((category) => (
+                <option key={category}>{category}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Valor padrão</label>
+            <input
+              className={inputClass}
+              type="number"
+              min="0"
+              step="0.01"
+              value={servicoForm.valor_padrao}
+              onChange={(event) =>
+                setServicoForm((currentForm) => ({
+                  ...currentForm,
+                  valor_padrao: event.target.value,
+                }))
+              }
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              type="submit"
+              className="rounded-lg bg-sky-500 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-400"
+            >
+              Adicionar serviço
+            </button>
+          </div>
+        </form>
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="text-slate-400">
+              <tr>
+                <th className="py-3 pr-4 text-left">Nome</th>
+                <th className="py-3 pr-4 text-left">Categoria</th>
+                <th className="py-3 pr-4 text-left">Valor padrão</th>
+                <th className="py-3 pr-4 text-left">Ativo</th>
+                <th className="py-3 text-left">Remover</th>
+              </tr>
+            </thead>
+            <tbody>
+              {servicos.map((servico) => (
+                <tr key={servico.id} className="border-t border-slate-800">
+                  <td className="py-3 pr-4 text-slate-100">{servico.nome}</td>
+                  <td className="py-3 pr-4 text-slate-300">{servico.categoria}</td>
+                  <td className="py-3 pr-4 text-slate-300">
+                    R$ {servico.valor_padrao.toFixed(2)}
+                  </td>
+                  <td className="py-3 pr-4">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setServicos((currentServicos) =>
+                          currentServicos.map((currentServico) =>
+                            currentServico.id === servico.id
+                              ? { ...currentServico, ativo: !currentServico.ativo }
+                              : currentServico,
+                          ),
+                        )
+                      }
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        servico.ativo
+                          ? "bg-emerald-500/15 text-emerald-200"
+                          : "bg-slate-700 text-slate-200"
+                      }`}
+                    >
+                      {servico.ativo ? "Ativo" : "Inativo"}
+                    </button>
+                  </td>
+                  <td className="py-3">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setServicos((currentServicos) =>
+                          currentServicos.filter(
+                            (currentServico) => currentServico.id !== servico.id,
+                          ),
+                        )
+                      }
+                      className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                    >
+                      Remover
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            type="button"
+            onClick={handleSaveServicos}
+            className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+          >
+            Salvar catálogo
+          </button>
+        </div>
+      </section>
+      )}
+
+      {activeTab === "pagamentos" && (
       <section className={sectionClass}>
         <div className="mb-5">
           <h3 className="text-xl font-bold">Regras de pagamento</h3>
@@ -615,7 +966,9 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
           </div>
         </div>
       </section>
+      )}
 
+      {activeTab === "usuarios" && (
       <section className={sectionClass}>
         <div className="mb-5">
           <h3 className="text-xl font-bold">Usuários e permissões</h3>
@@ -760,6 +1113,108 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
           )}
         </div>
       </section>
+      )}
+
+      {activeTab === "feedback" && (
+      <section className={sectionClass}>
+        <div className="mb-5">
+          <h3 className="text-xl font-bold">Enviar sugestão</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Sua opinião ajuda a melhorar o AutoHub. Conte o que está faltando
+            ou o que poderia ser melhor.
+          </p>
+        </div>
+        <form className="grid gap-4" onSubmit={handleSubmitFeedback}>
+          <div className="grid gap-4 md:grid-cols-[220px_1fr]">
+            <div>
+              <label className={labelClass}>Tipo de feedback</label>
+              <select
+                className={inputClass}
+                value={feedbackForm.tipo}
+                onChange={(event) =>
+                  setFeedbackForm((currentForm) => ({
+                    ...currentForm,
+                    tipo: event.target.value as FeedbackItem["tipo"],
+                  }))
+                }
+              >
+                <option>Sugestão de melhoria</option>
+                <option>Reportar problema</option>
+                <option>Nova funcionalidade</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Avaliação geral</label>
+              <div className="flex gap-1 pt-2">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() =>
+                      setFeedbackForm((currentForm) => ({
+                        ...currentForm,
+                        avaliacao: star,
+                      }))
+                    }
+                    className={`text-2xl ${
+                      star <= feedbackForm.avaliacao
+                        ? "text-amber-300"
+                        : "text-slate-600"
+                    }`}
+                  >
+                    ★
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className={labelClass}>Descrição</label>
+            <textarea
+              className={inputClass}
+              rows={5}
+              value={feedbackForm.descricao}
+              onChange={(event) =>
+                setFeedbackForm((currentForm) => ({
+                  ...currentForm,
+                  descricao: event.target.value,
+                }))
+              }
+            />
+          </div>
+          <div>
+            <button
+              type="submit"
+              className="rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-400"
+            >
+              Enviar feedback
+            </button>
+          </div>
+        </form>
+
+        <div className="mt-6 grid gap-3">
+          {feedbacks.map((item) => (
+            <article
+              key={item.id}
+              className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm"
+            >
+              <div className="flex flex-wrap justify-between gap-3">
+                <span className="text-slate-400">
+                  {new Date(item.created_at).toLocaleString("pt-BR")} ·{" "}
+                  {item.tipo}
+                </span>
+                <span className="text-amber-300">{"★".repeat(item.avaliacao)}</span>
+              </div>
+              <p className="mt-2 text-slate-200">
+                {item.descricao.length > 120
+                  ? `${item.descricao.slice(0, 120)}...`
+                  : item.descricao}
+              </p>
+            </article>
+          ))}
+        </div>
+      </section>
+      )}
     </div>
   );
 }
