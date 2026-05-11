@@ -39,7 +39,10 @@ const benefits = [
 ];
 
 function translateSupabaseError(message: string) {
-  if (message.includes("User already registered")) {
+  if (
+    message.includes("user_already_exists") ||
+    message.includes("User already registered")
+  ) {
     return "Este e-mail já possui uma conta";
   }
 
@@ -134,39 +137,23 @@ export default function Cadastro() {
       });
 
     if (signInError || !signInData.session) {
-      setErrorMessage("Conta criada mas erro ao entrar. Tente fazer login.");
+      setErrorMessage("Conta criada. Faça login para continuar.");
       setIsLoading(false);
+      navigate("/login", { replace: true });
       return;
     }
 
-    const { data: oficina, error: oficinaError } = await supabase
-      .from("oficinas")
-      .insert({
-        nome: form.nomeOficina.trim(),
-        whatsapp: form.whatsapp.trim() || null,
-      })
-      .select("id")
-      .single<{ id: string }>();
-
-    if (oficinaError || !oficina) {
-      setErrorMessage("Erro ao criar conta. Tente novamente.");
-      setIsLoading(false);
-      return;
-    }
-
-    const { error: usuarioError } = await supabase.from("usuarios").insert({
-      oficina_id: oficina.id,
-      auth_user_id: signInData.session.user.id,
-      nome: form.nomeUsuario.trim(),
-      email,
-      perfil: "admin",
-      status: "ativo",
+    const { error: rpcError } = await supabase.rpc("criar_oficina_e_usuario", {
+      p_nome_oficina: form.nomeOficina.trim(),
+      p_whatsapp: form.whatsapp.trim() || null,
+      p_nome_usuario: form.nomeUsuario.trim(),
+      p_email: email,
     });
 
     setIsLoading(false);
 
-    if (usuarioError) {
-      setErrorMessage("Erro ao criar conta. Tente novamente.");
+    if (rpcError) {
+      setErrorMessage("Erro ao configurar sua oficina. Entre em contato.");
       return;
     }
 
