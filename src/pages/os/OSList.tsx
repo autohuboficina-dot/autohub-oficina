@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/useAuth";
+import { supabase } from "../../lib/supabase";
 import {
   getBudgetApprovalBadgeClass,
   getBudgetApprovalLabel,
@@ -9,8 +10,87 @@ import {
   getServiceOrderStorageError,
   getStoredOrders,
   getStoredOrdersSupabase,
+  normalizeBudgetApprovalStatus,
+  normalizeServiceOrderStatus,
+  saveStoredOrders,
   type ServiceOrder,
 } from "../../services/osService";
+
+type SupabaseOrderStatusRow = {
+  codigo: string;
+  status: string | null;
+  status_orcamento?: string | null;
+  updated_at: string | null;
+};
+
+function normalizeSyncedBudgetStatus(status?: string | null) {
+  return normalizeBudgetApprovalStatus((status || "pendente").toLowerCase());
+}
+
+async function syncOrdersStatusFromSupabase(orders: ServiceOrder[]) {
+  if (!supabase || orders.length === 0) {
+    return orders;
+  }
+
+  const codigos = orders.map((order) => order.codigo).filter(Boolean);
+
+  if (!codigos.length) {
+    return orders;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("ordens_servico")
+      .select("codigo, status, status_orcamento, updated_at")
+      .in("codigo", codigos)
+      .returns<SupabaseOrderStatusRow[]>();
+
+    if (error || !data?.length) {
+      return orders;
+    }
+
+    const statusByCode = new Map(data.map((row) => [row.codigo, row]));
+    let hasUpdates = false;
+    const updatedOrders = orders.map((order) => {
+      const syncedRow = statusByCode.get(order.codigo);
+
+      if (!syncedRow) {
+        return order;
+      }
+
+      const syncedStatus = normalizeServiceOrderStatus(
+        syncedRow.status || order.status,
+      );
+      const syncedBudgetStatus = syncedRow.status_orcamento
+        ? normalizeSyncedBudgetStatus(syncedRow.status_orcamento)
+        : order.statusAprovacao;
+      const shouldUpdate =
+        syncedStatus !== order.status ||
+        syncedBudgetStatus !== order.statusAprovacao ||
+        (syncedRow.updated_at && syncedRow.updated_at !== order.updatedAt);
+
+      if (!shouldUpdate) {
+        return order;
+      }
+
+      hasUpdates = true;
+      return {
+        ...order,
+        status: syncedStatus,
+        statusAprovacao: syncedBudgetStatus,
+        updatedAt: syncedRow.updated_at || order.updatedAt,
+      };
+    });
+
+    if (hasUpdates) {
+      saveStoredOrders(updatedOrders);
+    }
+
+    return updatedOrders;
+  } catch {
+    return orders;
+  }
+}
 
 export default function OSList() {
   const navigate = useNavigate();
@@ -23,7 +103,10 @@ export default function OSList() {
 
   async function reloadOrders() {
     setIsLoadingOrders(true);
-    setOrdens(oficina_id ? await getStoredOrdersSupabase(oficina_id) : getStoredOrders());
+    const loadedOrders = oficina_id
+      ? await getStoredOrdersSupabase(oficina_id)
+      : getStoredOrders();
+    setOrdens(await syncOrdersStatusFromSupabase(loadedOrders));
     setStorageError(getServiceOrderStorageError());
     setIsLoadingOrders(false);
   }
@@ -35,9 +118,10 @@ export default function OSList() {
       const loadedOrders = oficina_id
         ? await getStoredOrdersSupabase(oficina_id)
         : getStoredOrders();
+      const syncedOrders = await syncOrdersStatusFromSupabase(loadedOrders);
 
       if (isMounted) {
-        setOrdens(loadedOrders);
+        setOrdens(syncedOrders);
         setStorageError(getServiceOrderStorageError());
         setIsLoadingOrders(false);
       }

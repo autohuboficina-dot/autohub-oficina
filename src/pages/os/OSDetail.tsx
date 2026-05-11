@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
 import ReciboOS from "../../components/ReciboOS";
 import { useAuth } from "../../contexts/useAuth";
+import { supabase } from "../../lib/supabase";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   calculatePaymentSimulation,
@@ -20,6 +21,8 @@ import {
   getServiceOrderSupabase,
   getStoredOrders,
   isServiceOrderBudgetLocked,
+  normalizeBudgetApprovalStatus,
+  normalizeServiceOrderStatus,
   saveServiceOrderBudgetSupabase,
   saveStoredOrders,
   updateServiceOrderSupabase,
@@ -125,6 +128,12 @@ type DetailTabId =
 
 type StoredPerfil = "admin" | "atendimento" | "mecanico" | "compras" | "financeiro";
 
+type SupabaseOrderStatusRow = {
+  status: string | null;
+  status_orcamento?: string | null;
+  updated_at: string | null;
+};
+
 type ServicoCatalogo = {
   id: string;
   nome: string;
@@ -161,6 +170,56 @@ function getStoredPerfil(): StoredPerfil {
   }
 
   return "atendimento";
+}
+
+function normalizeSyncedBudgetStatus(status?: string | null) {
+  return normalizeBudgetApprovalStatus((status || "pendente").toLowerCase());
+}
+
+async function syncOrderStatusFromSupabase(os: ServiceOrder) {
+  if (!supabase || !os.codigo) {
+    return os;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("ordens_servico")
+      .select("status, status_orcamento, updated_at")
+      .eq("codigo", os.codigo)
+      .single<SupabaseOrderStatusRow>();
+
+    if (error || !data) {
+      return os;
+    }
+
+    const syncedStatus = normalizeServiceOrderStatus(data.status || os.status);
+    const syncedBudgetStatus = data.status_orcamento
+      ? normalizeSyncedBudgetStatus(data.status_orcamento)
+      : os.statusAprovacao;
+    const shouldUpdate =
+      syncedStatus !== os.status ||
+      syncedBudgetStatus !== os.statusAprovacao ||
+      (data.updated_at && data.updated_at !== os.updatedAt);
+
+    if (!shouldUpdate) {
+      return os;
+    }
+
+    const updatedOrder: ServiceOrder = {
+      ...os,
+      status: syncedStatus,
+      statusAprovacao: syncedBudgetStatus,
+      updatedAt: data.updated_at || os.updatedAt,
+    };
+    const updatedOrders = getStoredOrders().map((storedOrder) =>
+      storedOrder.codigo === os.codigo ? updatedOrder : storedOrder,
+    );
+
+    saveStoredOrders(updatedOrders);
+    return updatedOrder;
+  } catch {
+    return os;
+  }
 }
 
 function getServicosCatalogo(): ServicoCatalogo[] {
@@ -723,9 +782,12 @@ export default function OSDetail() {
         const loadedOrder = getStoredOrders().find(
           (storedOrder) => storedOrder.codigo === id || storedOrder.id === id,
         );
+        const syncedOrder = loadedOrder
+          ? await syncOrderStatusFromSupabase(loadedOrder)
+          : undefined;
 
         if (isMounted) {
-          setOrder((currentOrder) => loadedOrder ?? currentOrder);
+          setOrder((currentOrder) => syncedOrder ?? currentOrder);
           setHasLoadedOrder(true);
         }
       } finally {
