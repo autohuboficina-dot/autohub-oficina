@@ -61,16 +61,24 @@ function toNumber(value: string) {
   return Number(value || 0);
 }
 
+function getSingleVehicleId(clientes: Cliente[], clienteId: string) {
+  const cliente = clientes.find((currentCliente) => currentCliente.id === clienteId);
+
+  return cliente?.veiculos.length === 1 ? cliente.veiculos[0].id : "";
+}
+
 export default function OSNew() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const clienteIdParam = searchParams.get("clienteId") || "";
   const { oficina_id } = useAuth();
   const [clientes, setClientes] = useState<Cliente[]>(() => getClientes());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [checklistItems] = useState(() => getChecklistConfig());
   const [selectedClienteId, setSelectedClienteId] = useState(() => {
-    const clienteId = searchParams.get("clienteId") || "";
-    return getClientes().some((cliente) => cliente.id === clienteId) ? clienteId : "";
+    return getClientes().some((cliente) => cliente.id === clienteIdParam)
+      ? clienteIdParam
+      : "";
   });
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [problemReport, setProblemReport] = useState("");
@@ -113,6 +121,14 @@ export default function OSNew() {
 
       if (isMounted) {
         setClientes(loadedClientes);
+
+        if (
+          clienteIdParam &&
+          loadedClientes.some((cliente) => cliente.id === clienteIdParam)
+        ) {
+          setSelectedClienteId(clienteIdParam);
+          setSelectedVehicleId(getSingleVehicleId(loadedClientes, clienteIdParam));
+        }
       }
     }
 
@@ -121,7 +137,7 @@ export default function OSNew() {
     return () => {
       isMounted = false;
     };
-  }, [oficina_id]);
+  }, [clienteIdParam, oficina_id]);
 
   const selectedCliente = useMemo(
     () => clientes.find((cliente) => cliente.id === selectedClienteId),
@@ -532,8 +548,10 @@ export default function OSNew() {
                     className={inputClass}
                     value={selectedClienteId}
                     onChange={(event) => {
-                      setSelectedClienteId(event.target.value);
-                      setSelectedVehicleId("");
+                      const clienteId = event.target.value;
+
+                      setSelectedClienteId(clienteId);
+                      setSelectedVehicleId(getSingleVehicleId(clientes, clienteId));
                     }}
                   >
                     <option value="" disabled>

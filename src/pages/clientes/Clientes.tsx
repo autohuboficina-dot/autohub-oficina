@@ -305,7 +305,7 @@ export default function Clientes() {
       motor: veiculo.motor.trim(),
       combustivel: veiculo.combustivel,
       placa: normalizePlate(veiculo.placa),
-      chassiVin: veiculo.chassiVin.trim(),
+      chassiVin: veiculo.chassiVin.trim().toUpperCase(),
       observacoes: veiculo.observacoes.trim(),
     }));
     const validationError = validateForm(veiculos);
@@ -371,15 +371,17 @@ export default function Clientes() {
       </div>
       </div>
 
-      <section className={`${sectionClass} mb-6`}>
-        <label className={labelClass}>Buscar cliente</label>
-        <input
-          className={inputClass}
-          placeholder="Nome, telefone, CPF/CNPJ ou placa"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-      </section>
+      {!showForm && (
+        <section className={`${sectionClass} mb-6`}>
+          <label className={labelClass}>Buscar cliente</label>
+          <input
+            className={inputClass}
+            placeholder="Nome, telefone, CPF/CNPJ ou placa"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </section>
+      )}
 
       {showForm && (
         <section className={`${sectionClass} mb-6`}>
@@ -660,7 +662,11 @@ export default function Clientes() {
                             placeholder="ABC1D23"
                             value={veiculo.placa}
                             onChange={(event) =>
-                              updateVehicle(veiculo.id, "placa", event.target.value)
+                              updateVehicle(
+                                veiculo.id,
+                                "placa",
+                                event.target.value.toUpperCase(),
+                              )
                             }
                           />
                         </div>
@@ -675,7 +681,7 @@ export default function Clientes() {
                               updateVehicle(
                                 veiculo.id,
                                 "chassiVin",
-                                event.target.value,
+                                event.target.value.toUpperCase(),
                               )
                             }
                           />
@@ -726,6 +732,7 @@ export default function Clientes() {
         </section>
       )}
 
+      {!showForm && (
       <section className={sectionClass}>
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-xl font-semibold">Clientes cadastrados</h3>
@@ -824,6 +831,7 @@ export default function Clientes() {
           </div>
         )}
       </section>
+      )}
 
       {selectedCliente && (
         <section className={`${sectionClass} mt-6`}>

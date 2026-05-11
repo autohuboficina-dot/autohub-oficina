@@ -97,6 +97,7 @@ function AppContent() {
   const location = useLocation();
   const [currentRole, setCurrentRole] = useState<UserRole>(getInitialRole);
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const isPublicBudgetRoute =
     location.pathname.startsWith("/orcamento/") ||
@@ -132,7 +133,20 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <aside className="fixed left-0 top-0 flex h-screen w-64 flex-col border-r border-slate-800 bg-slate-900 p-6">
+      {isSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          className="fixed inset-0 z-30 bg-slate-950/70 lg:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-slate-800 bg-slate-900 p-6 transition-transform duration-200 lg:translate-x-0 ${
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div>
           <h1 className="text-xl font-bold text-sky-400">
             {oficinaConfig.nomeOficina}
@@ -147,6 +161,7 @@ function AppContent() {
                 <Link
                   key={`${currentRole}-${item.path}-${item.label}`}
                   to={item.path}
+                  onClick={() => setIsSidebarOpen(false)}
                   className={`block rounded-lg px-4 py-2 text-sm transition ${
                     isActive
                       ? "bg-sky-500 font-medium text-white"
@@ -170,15 +185,26 @@ function AppContent() {
         </button>
       </aside>
 
-      <main className="ml-64 min-h-screen p-8">
+      <main className="min-h-screen p-4 lg:ml-64 lg:p-8">
         <header className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900 px-5 py-4">
-          <div>
-            <span className="text-xs font-semibold uppercase text-slate-500">
-              Perfil atual
-            </span>
-            <p className="mt-1 text-lg font-semibold text-slate-100">
-              {ROLE_LABELS[currentRole]}
-            </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Abrir menu"
+              onClick={() => setIsSidebarOpen(true)}
+              className="rounded-lg border border-slate-700 px-3 py-2 text-lg leading-none text-slate-200 hover:bg-slate-800 lg:hidden"
+            >
+              ☰
+            </button>
+
+            <div>
+              <span className="text-xs font-semibold uppercase text-slate-500">
+                Perfil atual
+              </span>
+              <p className="mt-1 text-lg font-semibold text-slate-100">
+                {ROLE_LABELS[currentRole]}
+              </p>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
