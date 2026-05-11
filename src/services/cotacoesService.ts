@@ -237,7 +237,7 @@ function mapCotacaoFromRows(
   }));
   const cotacao: CotacaoPeca = {
     id: row.id,
-    osId: row.ordem_servico_id || "",
+    osId: row.ordem_servico_id,
     oficinaNome: "",
     fornecedorId: row.fornecedor_id || "",
     fornecedorNome: row.fornecedores?.nome || "Fornecedor não informado",
@@ -295,7 +295,7 @@ function mapCotacaoFromRows(
 function mapPublicCotacao(data: PublicCotacaoResponse): CotacaoPeca {
   const cotacao: CotacaoPeca = {
     id: data.id,
-    osId: data.os_id || "",
+    osId: data.os_id,
     oficinaNome: data.oficina?.nome || "",
     fornecedorId: data.fornecedor?.id || "",
     fornecedorNome: data.fornecedor?.nome || "Fornecedor",
@@ -419,7 +419,7 @@ export async function saveCotacaoSupabase(
     return saveCotacao(cotacao);
   }
 
-  if (!isUuid(cotacao.osId) || !isUuid(cotacao.fornecedorId)) {
+  if (!cotacao.osId || !isUuid(cotacao.osId) || !isUuid(cotacao.fornecedorId)) {
     return saveCotacao(cotacao);
   }
 

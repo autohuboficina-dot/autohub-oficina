@@ -9,7 +9,6 @@ import {
   useLocation,
 } from "react-router-dom";
 import {
-  ROLE_LABELS,
   type UserRole,
 } from "./accessControl";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
@@ -97,14 +96,26 @@ function isActivePath(currentPath: string, itemPath: string) {
 
 function getRoleBadgeClass(role: UserRole) {
   const badgeClasses: Record<UserRole, string> = {
-    admin: "bg-cyan-500/20 text-cyan-200 ring-cyan-400/30",
+    admin: "bg-sky-500/20 text-sky-200 ring-sky-400/30",
     mecanico: "bg-emerald-500/20 text-emerald-200 ring-emerald-400/30",
     atendimento: "bg-amber-500/20 text-amber-200 ring-amber-400/30",
     compras: "bg-violet-500/20 text-violet-200 ring-violet-400/30",
-    financeiro: "bg-sky-500/20 text-sky-200 ring-sky-400/30",
+    financeiro: "bg-orange-500/20 text-orange-200 ring-orange-400/30",
   };
 
   return badgeClasses[role];
+}
+
+function getRoleBadgeLabel(role: UserRole) {
+  const labels: Record<UserRole, string> = {
+    admin: "Administrador",
+    mecanico: "Mecânico",
+    atendimento: "Atendimento",
+    compras: "Compras",
+    financeiro: "Financeiro",
+  };
+
+  return labels[role];
 }
 
 function AppContent() {
@@ -210,7 +221,7 @@ function AppContent() {
 
             <div>
               <span className="text-xs font-semibold uppercase text-slate-500">
-                Usuário logado
+                USUÁRIO CONECTADO
               </span>
               <div className="mt-1 flex flex-wrap items-center gap-2">
                 <p className="text-lg font-semibold text-white">{userName}</p>
@@ -219,7 +230,7 @@ function AppContent() {
                     currentRole,
                   )}`}
                 >
-                  {ROLE_LABELS[currentRole]}
+                  {getRoleBadgeLabel(currentRole)}
                 </span>
               </div>
             </div>

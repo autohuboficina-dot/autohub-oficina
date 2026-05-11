@@ -440,9 +440,9 @@ export default function Financeiro({ role }: FinanceiroProps) {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <span className="text-sm font-semibold uppercase text-sky-400">
-            Financeiro
+            Controle financeiro
           </span>
-          <h2 className="mt-1 text-3xl font-bold">Controle financeiro</h2>
+          <h2 className="mt-1 text-3xl font-bold">Financeiro</h2>
           <p className="mt-2 text-slate-400">
             Entradas, saídas, contas pendentes e lucro estimado da oficina.
           </p>

@@ -59,7 +59,7 @@ export type CotacaoPecaEscolha = {
 
 export type CotacaoPeca = {
   id: string;
-  osId: string;
+  osId: string | null;
   oficinaNome: string;
   fornecedorId: string;
   fornecedorNome: string;
@@ -217,7 +217,7 @@ function normalizeCotacao(cotacao: CotacaoPeca): CotacaoPeca {
   return {
     ...cotacao,
     id: cotacao.id || createCotacaoId(),
-    osId: cotacao.osId || "",
+    osId: cotacao.osId || null,
     oficinaNome: cotacao.oficinaNome || "",
     fornecedorId: cotacao.fornecedorId || "",
     fornecedorNome: cotacao.fornecedorNome || "Fornecedor não informado",

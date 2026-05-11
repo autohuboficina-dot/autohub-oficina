@@ -62,6 +62,10 @@ export default function Login() {
       if (usuario?.nome) {
         localStorage.setItem("autohub:usuario-nome", usuario.nome);
       }
+
+      if (usuario?.perfil) {
+        localStorage.setItem("autohub:perfil", usuario.perfil);
+      }
     }
 
     await refreshAuth();
