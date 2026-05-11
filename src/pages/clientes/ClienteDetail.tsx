@@ -178,7 +178,9 @@ export default function ClienteDetail() {
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
             <span className="text-xs uppercase text-slate-500">Cidade</span>
-            <p className={dataValueClass}>{cliente.cidade || "-"}</p>
+            <p className={dataValueClass}>
+              {[cliente.cidade, cliente.estado].filter(Boolean).join(" - ") || "-"}
+            </p>
           </div>
         </div>
       </section>

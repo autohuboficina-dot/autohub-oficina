@@ -22,6 +22,64 @@ export type ClienteVeiculo = {
 };
 
 export type ClienteTipo = "Pessoa física" | "Empresa" | "Frota";
+export type EstadoUF =
+  | "AC"
+  | "AL"
+  | "AP"
+  | "AM"
+  | "BA"
+  | "CE"
+  | "DF"
+  | "ES"
+  | "GO"
+  | "MA"
+  | "MT"
+  | "MS"
+  | "MG"
+  | "PA"
+  | "PB"
+  | "PR"
+  | "PE"
+  | "PI"
+  | "RJ"
+  | "RN"
+  | "RS"
+  | "RO"
+  | "RR"
+  | "SC"
+  | "SP"
+  | "SE"
+  | "TO";
+
+export const ESTADOS_UF: EstadoUF[] = [
+  "AC",
+  "AL",
+  "AP",
+  "AM",
+  "BA",
+  "CE",
+  "DF",
+  "ES",
+  "GO",
+  "MA",
+  "MT",
+  "MS",
+  "MG",
+  "PA",
+  "PB",
+  "PR",
+  "PE",
+  "PI",
+  "RJ",
+  "RN",
+  "RS",
+  "RO",
+  "RR",
+  "SC",
+  "SP",
+  "SE",
+  "TO",
+];
 
 export type Cliente = {
   id: string;
@@ -31,6 +89,7 @@ export type Cliente = {
   documento: string;
   email: string;
   cidade: string;
+  estado: EstadoUF;
   observacoes: string;
   veiculos: ClienteVeiculo[];
   quantidadeVeiculos: number;
@@ -60,6 +119,7 @@ function normalizeCliente(cliente: Cliente): Cliente {
   return {
     ...cliente,
     tipo: cliente.tipo || "Pessoa física",
+    estado: ESTADOS_UF.includes(cliente.estado) ? cliente.estado : "SP",
     veiculos: normalizedVeiculos,
     quantidadeVeiculos: normalizedVeiculos.length,
     criadoEm: cliente.criadoEm || new Date().toISOString(),

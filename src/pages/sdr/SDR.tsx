@@ -14,6 +14,7 @@ type StoredOrder = {
   statusAprovacao?: string;
   updatedAt?: string;
   createdAt?: string;
+  created_at?: string;
   criadoEm?: string;
   orcamento?: {
     totalFinal?: number;
@@ -48,6 +49,12 @@ type OficinaMetrics = {
   taxaAprovacao: number;
   totalClientes: number;
   receitaEstimada: number;
+};
+
+type HermesUsageInfo = {
+  diasDeUso: number;
+  progressPercent: number;
+  canAnalyze: boolean;
 };
 
 const closedStatuses = ["FINALIZADA", "ENTREGUE", "CANCELADA"];
@@ -142,6 +149,37 @@ function collectMetrics(): OficinaMetrics {
   };
 }
 
+function getOrderCreatedAt(order: StoredOrder) {
+  return order.createdAt ?? order.created_at ?? order.criadoEm ?? "";
+}
+
+function collectUsageInfo(): HermesUsageInfo {
+  const ordens = safeParseArray<StoredOrder>("autohub:service-orders");
+  const osOrdenadas = [...ordens].sort((a, b) => {
+    const dateA = new Date(getOrderCreatedAt(a)).getTime();
+    const dateB = new Date(getOrderCreatedAt(b)).getTime();
+    const safeDateA = Number.isNaN(dateA) ? Number.MAX_SAFE_INTEGER : dateA;
+    const safeDateB = Number.isNaN(dateB) ? Number.MAX_SAFE_INTEGER : dateB;
+
+    return safeDateA - safeDateB;
+  });
+  const primeiraOS = osOrdenadas[0];
+  const primeiraOSDate = primeiraOS ? new Date(getOrderCreatedAt(primeiraOS)) : null;
+  const diasDeUso =
+    primeiraOSDate && !Number.isNaN(primeiraOSDate.getTime())
+      ? Math.max(
+          Math.floor((Date.now() - primeiraOSDate.getTime()) / 86400000),
+          0,
+        )
+      : 0;
+
+  return {
+    diasDeUso,
+    progressPercent: Math.min((diasDeUso / 30) * 100, 100),
+    canAnalyze: diasDeUso >= 30,
+  };
+}
+
 function createHermesPrompt(metrics: OficinaMetrics) {
   return `Você é o Hermes, assistente de inteligência da oficina mecânica "${metrics.nomeOficina}".
 Analise os dados abaixo e responda em português brasileiro de forma direta e prática,
@@ -232,7 +270,9 @@ export default function SDR() {
   const [isLoading, setIsLoading] = useState(false);
   const [analysisDate, setAnalysisDate] = useState<Date | null>(null);
   const metrics = useMemo(() => collectMetrics(), []);
+  const usageInfo = useMemo(() => collectUsageInfo(), []);
   const hasData = metrics.totalOS > 0;
+  const canAnalyze = hasData && usageInfo.canAnalyze;
 
   async function analyzeWorkshop() {
     setErrorMessage("");
@@ -330,25 +370,47 @@ export default function SDR() {
         </div>
       )}
 
+      {hasData && !usageInfo.canAnalyze && (
+        <section className="mb-6 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-5 text-amber-50 shadow-sm shadow-slate-950/20 sm:p-6">
+          <h3 className="text-lg font-bold">
+            O Hermes precisa de pelo menos 30 dias de dados para gerar análises
+            precisas.
+          </h3>
+          <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-950 ring-1 ring-amber-400/20">
+            <div
+              className="h-full rounded-full bg-amber-400 transition-all"
+              style={{ width: `${usageInfo.progressPercent}%` }}
+            />
+          </div>
+          <p className="mt-3 text-sm text-amber-100">
+            {usageInfo.diasDeUso === 0
+              ? "Abra sua primeira OS para começar a contagem."
+              : `${usageInfo.diasDeUso} de 30 dias completos`}
+          </p>
+        </section>
+      )}
+
       {errorMessage && (
         <div className="mb-6 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
           {errorMessage}
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={() => void analyzeWorkshop()}
-        disabled={!hasData || isLoading}
-        className="mb-6 inline-flex items-center gap-3 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {isLoading && (
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-        )}
-        {isLoading
-          ? "Hermes está analisando sua oficina..."
-          : "Analisar minha oficina agora"}
-      </button>
+      {canAnalyze && (
+        <button
+          type="button"
+          onClick={() => void analyzeWorkshop()}
+          disabled={isLoading}
+          className="mb-6 inline-flex items-center gap-3 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isLoading && (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+          )}
+          {isLoading
+            ? "Hermes está analisando sua oficina..."
+            : "Analisar minha oficina agora"}
+        </button>
+      )}
 
       {rawResponse && (
         <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm shadow-slate-950/20 sm:p-6">

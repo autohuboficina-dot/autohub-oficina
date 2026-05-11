@@ -6,6 +6,7 @@ import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
   createClienteVeiculoId,
+  ESTADOS_UF,
   TIPOS_VEICULO,
   getClientes,
   getClientesSupabase,
@@ -15,6 +16,7 @@ import {
   type Cliente,
   type ClienteTipo,
   type ClienteVeiculo,
+  type EstadoUF,
 } from "../../services/clientesService";
 
 type ClienteForm = {
@@ -24,6 +26,7 @@ type ClienteForm = {
   documento: string;
   email: string;
   cidade: string;
+  estado: EstadoUF;
   observacoes: string;
   veiculos: ClienteVeiculo[];
 };
@@ -51,6 +54,7 @@ function createBlankForm(): ClienteForm {
     documento: "",
     email: "",
     cidade: "",
+    estado: "SP",
     observacoes: "",
     veiculos: [createEmptyVehicle()],
   };
@@ -172,6 +176,7 @@ export default function Clientes() {
       documento: formatCpfCnpj(cliente.documento),
       email: cliente.email,
       cidade: cliente.cidade,
+      estado: cliente.estado || "SP",
       observacoes: cliente.observacoes,
       veiculos: cliente.veiculos.length ? cliente.veiculos : [createEmptyVehicle()],
     });
@@ -325,6 +330,7 @@ export default function Clientes() {
       documento: onlyDigits(form.documento),
       email: form.email.trim(),
       cidade: form.cidade.trim(),
+      estado: form.estado,
       observacoes: form.observacoes.trim(),
       veiculos,
       quantidadeVeiculos: veiculos.length,
@@ -502,19 +508,39 @@ export default function Clientes() {
                 />
               </div>
 
-              <div>
-                <label className={labelClass}>Cidade</label>
-                <input
-                  className={inputClass}
-                  placeholder="São Paulo"
-                  value={form.cidade}
-                  onChange={(event) =>
-                    setForm((currentForm) => ({
-                      ...currentForm,
-                      cidade: event.target.value,
-                    }))
-                  }
-                />
+              <div className="grid gap-3 sm:grid-cols-[7fr_3fr]">
+                <div>
+                  <label className={labelClass}>Cidade</label>
+                  <input
+                    className={inputClass}
+                    placeholder="São Paulo"
+                    value={form.cidade}
+                    onChange={(event) =>
+                      setForm((currentForm) => ({
+                        ...currentForm,
+                        cidade: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass}>Estado</label>
+                  <select
+                    className={inputClass}
+                    value={form.estado}
+                    onChange={(event) =>
+                      setForm((currentForm) => ({
+                        ...currentForm,
+                        estado: event.target.value as EstadoUF,
+                      }))
+                    }
+                  >
+                    {ESTADOS_UF.map((estado) => (
+                      <option key={estado}>{estado}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="md:col-span-2 lg:col-span-3">
@@ -897,7 +923,10 @@ export default function Clientes() {
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
               <span className="text-xs uppercase text-slate-500">Cidade</span>
-              <p className="mt-1 font-medium">{selectedCliente.cidade || "-"}</p>
+              <p className="mt-1 font-medium">
+                {[selectedCliente.cidade, selectedCliente.estado].filter(Boolean).join(" - ") ||
+                  "-"}
+              </p>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
               <span className="text-xs uppercase text-slate-500">Veículos</span>

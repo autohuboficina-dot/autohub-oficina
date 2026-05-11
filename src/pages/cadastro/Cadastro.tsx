@@ -1,4 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
@@ -83,6 +84,8 @@ export default function Cadastro() {
   const [form, setForm] = useState<CadastroForm>(initialForm);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [showSenha, setShowSenha] = useState(false);
+  const [showConfirmarSenha, setShowConfirmarSenha] = useState(false);
 
   function updateField(field: keyof CadastroForm, value: string) {
     setForm((currentForm) => ({
@@ -266,26 +269,58 @@ export default function Cadastro() {
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block text-sm font-medium text-slate-200">
                 Senha
-                <input
-                  type="password"
-                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-sky-500"
-                  value={form.senha}
-                  onChange={(event) => updateField("senha", event.target.value)}
-                  autoComplete="new-password"
-                />
+                <span className="relative mt-2 block">
+                  <input
+                    type={showSenha ? "text" : "password"}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 pr-10 text-sm text-slate-100 outline-none transition focus:border-sky-500"
+                    value={form.senha}
+                    onChange={(event) => updateField("senha", event.target.value)}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSenha((currentValue) => !currentValue)}
+                    className="absolute inset-y-0 right-2 flex items-center text-slate-400 hover:text-slate-200"
+                    aria-label={showSenha ? "Ocultar senha" : "Mostrar senha"}
+                  >
+                    {showSenha ? (
+                      <EyeOff className="h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <Eye className="h-4 w-4" aria-hidden="true" />
+                    )}
+                  </button>
+                </span>
               </label>
 
               <label className="block text-sm font-medium text-slate-200">
                 Confirmar senha
-                <input
-                  type="password"
-                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-sky-500"
-                  value={form.confirmarSenha}
-                  onChange={(event) =>
-                    updateField("confirmarSenha", event.target.value)
-                  }
-                  autoComplete="new-password"
-                />
+                <span className="relative mt-2 block">
+                  <input
+                    type={showConfirmarSenha ? "text" : "password"}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 pr-10 text-sm text-slate-100 outline-none transition focus:border-sky-500"
+                    value={form.confirmarSenha}
+                    onChange={(event) =>
+                      updateField("confirmarSenha", event.target.value)
+                    }
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowConfirmarSenha((currentValue) => !currentValue)
+                    }
+                    className="absolute inset-y-0 right-2 flex items-center text-slate-400 hover:text-slate-200"
+                    aria-label={
+                      showConfirmarSenha ? "Ocultar senha" : "Mostrar senha"
+                    }
+                  >
+                    {showConfirmarSenha ? (
+                      <EyeOff className="h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <Eye className="h-4 w-4" aria-hidden="true" />
+                    )}
+                  </button>
+                </span>
               </label>
             </div>
 

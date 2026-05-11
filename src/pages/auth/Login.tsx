@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { normalizeRole } from "../../accessControl";
 import { useAuth } from "../../contexts/useAuth";
@@ -19,6 +20,7 @@ export default function Login() {
   const redirectTo = locationState?.from?.pathname || "/dashboard";
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
+  const [showSenha, setShowSenha] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -110,14 +112,28 @@ export default function Login() {
 
         <label className="mt-4 block text-sm font-medium text-slate-200">
           Senha
-          <input
-            type="password"
-            value={senha}
-            onChange={(event) => setSenha(event.target.value)}
-            required
-            autoComplete="current-password"
-            className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-sky-500"
-          />
+          <span className="relative mt-2 block">
+            <input
+              type={showSenha ? "text" : "password"}
+              value={senha}
+              onChange={(event) => setSenha(event.target.value)}
+              required
+              autoComplete="current-password"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 pr-10 text-sm text-slate-100 outline-none transition focus:border-sky-500"
+            />
+            <button
+              type="button"
+              onClick={() => setShowSenha((currentValue) => !currentValue)}
+              className="absolute inset-y-0 right-2 flex items-center text-slate-400 hover:text-slate-200"
+              aria-label={showSenha ? "Ocultar senha" : "Mostrar senha"}
+            >
+              {showSenha ? (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Eye className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
+          </span>
         </label>
 
         {errorMessage && (
