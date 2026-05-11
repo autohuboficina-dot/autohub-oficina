@@ -41,7 +41,7 @@ const permissionLabels: Record<UserRole, string> = {
   admin: "Admin vê todos os módulos, configurações e permissões.",
   financeiro: "Financeiro vê somente o módulo Financeiro.",
   mecanico: "Mecânico vê OS e Estoque em consulta.",
-  atendimento: "Atendimento vê Clientes, OS, Orçamentos e SDR.",
+  atendimento: "Atendimento vê Clientes, OS, Orçamentos e Hermes.",
   compras: "Compras vê Compras, Fornecedores e Estoque.",
 };
 

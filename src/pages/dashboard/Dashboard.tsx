@@ -146,7 +146,7 @@ function createMetrics(role: UserRole): MetricCard[] {
         tone: "amber",
       },
       {
-        label: "Follow-ups SDR",
+        label: "Follow-ups Hermes",
         value: String(followUps.length),
         hint: "Oportunidades de contato",
         tone: "sky",

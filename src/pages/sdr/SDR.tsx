@@ -1,341 +1,433 @@
 import { useMemo, useState } from "react";
-import { formatPhone, onlyDigits } from "../../utils/formatters";
-import { getClientes, type Cliente } from "../../services/clientesService";
-import { getConfiguracoesOficina } from "../../services/configuracoesService";
-import { getStoredOrders, type ServiceOrder } from "../../services/osService";
+import {
+  Activity,
+  AlertTriangle,
+  Brain,
+  Lightbulb,
+  Sparkles,
+  Target,
+} from "lucide-react";
 
-const RECENT_OS_LIMIT = 5;
-const OLD_OS_DAYS = 90;
+type StoredOrder = {
+  status?: string;
+  statusOrcamento?: string;
+  statusAprovacao?: string;
+  updatedAt?: string;
+  createdAt?: string;
+  criadoEm?: string;
+  orcamento?: {
+    totalFinal?: number;
+    total_final?: number;
+  };
+  total_final?: number;
+};
 
-function getWhatsAppPhone(value: string) {
-  const digits = onlyDigits(value);
+type StoredCliente = {
+  id?: string;
+};
 
-  if (!digits) {
-    return "";
+type OficinaConfig = {
+  nomeOficina?: string;
+};
+
+type HermesResult = {
+  resumo?: string;
+  alertas?: string[];
+  insights?: string[];
+  recomendacoes?: string[];
+};
+
+type OficinaMetrics = {
+  nomeOficina: string;
+  totalOS: number;
+  osAbertas: number;
+  osParadas: number;
+  orcamentosPendentes: number;
+  orcamentosAprovados: number;
+  orcamentosRecusados: number;
+  taxaAprovacao: number;
+  totalClientes: number;
+  receitaEstimada: number;
+};
+
+const closedStatuses = ["FINALIZADA", "ENTREGUE", "CANCELADA"];
+
+function safeParseArray<T>(key: string): T[] {
+  try {
+    const parsedValue = JSON.parse(localStorage.getItem(key) ?? "[]") as T[];
+    return Array.isArray(parsedValue) ? parsedValue : [];
+  } catch {
+    return [];
   }
-
-  if (digits.startsWith("55")) {
-    return digits;
-  }
-
-  if (digits.length === 10 || digits.length === 11) {
-    return `55${digits}`;
-  }
-
-  return digits;
 }
 
-function openWhatsApp(phone: string, message: string) {
-  const whatsappPhone = getWhatsAppPhone(phone);
-
-  if (!whatsappPhone) {
-    return false;
+function safeParseObject<T>(key: string): T {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? "{}") as T;
+  } catch {
+    return {} as T;
   }
+}
 
-  window.open(
-    `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(message)}`,
-    "_blank",
-    "noopener,noreferrer",
+function getOrderBudgetStatus(order: StoredOrder) {
+  return order.statusOrcamento || order.statusAprovacao || "";
+}
+
+function getOrderTotal(order: StoredOrder) {
+  return Number(
+    order.orcamento?.total_final ??
+      order.orcamento?.totalFinal ??
+      order.total_final ??
+      0,
   );
-  return true;
 }
 
-function createBudgetLink(publicToken: string) {
-  if (typeof window === "undefined") {
-    return `/orcamento/${publicToken}`;
+function collectMetrics(): OficinaMetrics {
+  const ordens = safeParseArray<StoredOrder>("autohub:service-orders");
+  const clientes = safeParseArray<StoredCliente>("autohub:clientes");
+  const config = safeParseObject<OficinaConfig>("autohub:configuracoes-oficina");
+  const nomeOficina = config.nomeOficina ?? "sua oficina";
+  const osAbertas = ordens.filter(
+    (order) => !closedStatuses.includes(order.status || ""),
+  ).length;
+  const osParadas = ordens.filter((order) => {
+    if (closedStatuses.includes(order.status || "")) {
+      return false;
+    }
+
+    const referenceDate = new Date(
+      order.updatedAt ?? order.createdAt ?? order.criadoEm ?? "",
+    );
+
+    if (Number.isNaN(referenceDate.getTime())) {
+      return false;
+    }
+
+    const dias = Math.floor((Date.now() - referenceDate.getTime()) / 86400000);
+    return dias >= 3;
+  }).length;
+  const orcamentosPendentes = ordens.filter(
+    (order) => getOrderBudgetStatus(order) === "PENDENTE",
+  ).length;
+  const orcamentosAprovados = ordens.filter((order) =>
+    ["APROVADO", "APROVADA", "confirmado_oficina", "pre_aprovado"].includes(
+      getOrderBudgetStatus(order),
+    ),
+  ).length;
+  const orcamentosRecusados = ordens.filter((order) =>
+    ["RECUSADO", "recusado"].includes(getOrderBudgetStatus(order)),
+  ).length;
+  const decidedBudgets = orcamentosAprovados + orcamentosRecusados;
+  const taxaAprovacao =
+    decidedBudgets > 0 ? (orcamentosAprovados / decidedBudgets) * 100 : 0;
+  const receitaEstimada = ordens
+    .filter((order) =>
+      ["APROVADO", "APROVADA", "confirmado_oficina", "pre_aprovado"].includes(
+        getOrderBudgetStatus(order),
+      ),
+    )
+    .reduce((total, order) => total + getOrderTotal(order), 0);
+
+  return {
+    nomeOficina,
+    totalOS: ordens.length,
+    osAbertas,
+    osParadas,
+    orcamentosPendentes,
+    orcamentosAprovados,
+    orcamentosRecusados,
+    taxaAprovacao,
+    totalClientes: clientes.length,
+    receitaEstimada,
+  };
+}
+
+function createHermesPrompt(metrics: OficinaMetrics) {
+  return `Você é o Hermes, assistente de inteligência da oficina mecânica "${metrics.nomeOficina}".
+Analise os dados abaixo e responda em português brasileiro de forma direta e prática,
+como um consultor experiente falando com o dono da oficina.
+
+DADOS DA OFICINA:
+- Total de OS no sistema: ${metrics.totalOS}
+- OS em andamento: ${metrics.osAbertas}
+- OS paradas há 3+ dias sem atualização: ${metrics.osParadas}
+- Orçamentos aguardando aprovação: ${metrics.orcamentosPendentes}
+- Orçamentos aprovados: ${metrics.orcamentosAprovados}
+- Orçamentos recusados: ${metrics.orcamentosRecusados}
+- Taxa de aprovação: ${metrics.taxaAprovacao.toFixed(1)}%
+- Total de clientes cadastrados: ${metrics.totalClientes}
+- Receita estimada em OS aprovadas: R$ ${metrics.receitaEstimada.toFixed(2)}
+
+Responda EXATAMENTE neste formato JSON, sem markdown, sem explicação extra:
+{
+  "resumo": "Uma frase resumindo a situação geral da oficina hoje",
+  "alertas": [
+    "alerta 1 específico e acionável",
+    "alerta 2 específico e acionável"
+  ],
+  "insights": [
+    "insight 1 baseado nos dados",
+    "insight 2 baseado nos dados"
+  ],
+  "recomendacoes": [
+    "recomendação 1 prática e direta",
+    "recomendação 2 prática e direta"
+  ]
+}
+
+Se não houver dados suficientes para um item, omita esse item do JSON.
+Máximo 3 itens por array. Seja direto, sem enrolação.`;
+}
+
+function normalizeList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").slice(0, 3)
+    : [];
+}
+
+function parseHermesResult(text: string): HermesResult {
+  const parsedValue = JSON.parse(text) as HermesResult;
+
+  return {
+    resumo: typeof parsedValue.resumo === "string" ? parsedValue.resumo : "",
+    alertas: normalizeList(parsedValue.alertas),
+    insights: normalizeList(parsedValue.insights),
+    recomendacoes: normalizeList(parsedValue.recomendacoes),
+  };
+}
+
+function formatAnalysisDate(value: Date) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(value);
+}
+
+function ResultList({
+  items,
+  fallback,
+}: {
+  items: string[];
+  fallback: string;
+}) {
+  if (!items.length) {
+    return <p className="text-sm text-slate-300">{fallback}</p>;
   }
 
-  return `${window.location.origin}/orcamento/${publicToken}`;
-}
-
-function formatDate(value: string) {
-  const date = new Date(value);
-
-  if (!value || Number.isNaN(date.getTime())) {
-    return "Data indisponível";
-  }
-
-  return new Intl.DateTimeFormat("pt-BR").format(date);
-}
-
-function getDaysSince(value: string) {
-  const date = new Date(value);
-
-  if (!value || Number.isNaN(date.getTime())) {
-    return 0;
-  }
-
-  const diff = Date.now() - date.getTime();
-  return Math.max(Math.floor(diff / (1000 * 60 * 60 * 24)), 0);
-}
-
-function sortOrdersByDate(orders: ServiceOrder[]) {
-  return [...orders].sort((a, b) => {
-    return new Date(b.criadoEm).getTime() - new Date(a.criadoEm).getTime();
-  });
-}
-
-function getOrderClientKeys(order: ServiceOrder) {
-  return [
-    order.clienteId,
-    onlyDigits(order.clienteTelefone || order.telefone),
-    order.clienteNome || order.cliente,
-  ].filter(Boolean);
-}
-
-function getClientKeys(cliente: Cliente) {
-  return [cliente.id, onlyDigits(cliente.telefone), cliente.nome].filter(Boolean);
+  return (
+    <ul className="space-y-3 text-sm text-slate-200">
+      {items.map((item) => (
+        <li key={item} className="rounded-lg border border-white/10 bg-slate-950/50 p-3">
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export default function SDR() {
-  const [feedback, setFeedback] = useState("");
-  const [oficinaConfig] = useState(() => getConfiguracoesOficina());
-  const clientes = useMemo(() => getClientes(), []);
-  const orders = useMemo(() => getStoredOrders(), []);
+  const [result, setResult] = useState<HermesResult | null>(null);
+  const [rawResponse, setRawResponse] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [analysisDate, setAnalysisDate] = useState<Date | null>(null);
+  const metrics = useMemo(() => collectMetrics(), []);
+  const hasData = metrics.totalOS > 0;
 
-  const sortedOrders = useMemo(() => sortOrdersByDate(orders), [orders]);
-  const pendingBudgets = useMemo(
-    () => sortedOrders.filter((order) => order.status === "AGUARDANDO_APROVACAO"),
-    [sortedOrders],
-  );
-  const clientsWithoutReturn = useMemo(() => {
-    const recentClientKeys = new Set(
-      sortedOrders.slice(0, RECENT_OS_LIMIT).flatMap(getOrderClientKeys),
-    );
+  async function analyzeWorkshop() {
+    setErrorMessage("");
+    setRawResponse("");
+    setResult(null);
 
-    return clientes.filter((cliente) => {
-      return !getClientKeys(cliente).some((key) => recentClientKeys.has(key));
-    });
-  }, [clientes, sortedOrders]);
-  const oldOrders = useMemo(
-    () =>
-      sortedOrders.filter((order) => {
-        return getDaysSince(order.criadoEm) >= OLD_OS_DAYS;
-      }),
-    [sortedOrders],
-  );
+    const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
 
-  function handleWhatsApp(phone: string, message: string, successMessage: string) {
-    const opened = openWhatsApp(phone, message);
-    setFeedback(
-      opened
-        ? successMessage
-        : "Não encontrei telefone válido para abrir o WhatsApp.",
-    );
-  }
+    if (!apiKey) {
+      setErrorMessage("Hermes não está configurado. Entre em contato com o suporte.");
+      return;
+    }
 
-  function sendBudgetReminder(order: ServiceOrder) {
-    const link = createBudgetLink(order.orcamento.publicToken || order.id);
-    handleWhatsApp(
-      order.clienteTelefone || order.telefone,
-      `Olá, ${order.cliente}. Aqui é da ${oficinaConfig.nomeOficina}. Seu orçamento da OS ${order.id} ainda está aguardando aprovação. Você pode visualizar e responder por aqui: ${link}`,
-      `Lembrete de orçamento preparado para ${order.cliente}.`,
-    );
-  }
+    setIsLoading(true);
 
-  function contactClient(cliente: Cliente) {
-    handleWhatsApp(
-      cliente.telefone,
-      `Olá, ${cliente.nome}. Tudo bem? Aqui é da ${oficinaConfig.nomeOficina}. Passando para saber se precisa de algum apoio com seu veículo ou deseja agendar uma avaliação.`,
-      `Contato preparado para ${cliente.nome}.`,
-    );
-  }
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1024,
+          messages: [
+            {
+              role: "user",
+              content: createHermesPrompt(metrics),
+            },
+          ],
+        }),
+      });
 
-  function remindReview(order: ServiceOrder) {
-    handleWhatsApp(
-      order.clienteTelefone || order.telefone,
-      `Olá, ${order.cliente}. Aqui é da ${oficinaConfig.nomeOficina}. Já faz um tempo desde a OS ${order.id} do seu ${order.veiculo}. Podemos agendar uma revisão preventiva?`,
-      `Lembrete de revisão preparado para ${order.cliente}.`,
-    );
+      if (!response.ok) {
+        throw new Error("Anthropic request failed");
+      }
+
+      const data = (await response.json()) as {
+        content?: Array<{ text?: string }>;
+      };
+      const texto = data.content?.[0]?.text ?? "";
+
+      try {
+        setResult(parseHermesResult(texto));
+      } catch {
+        setRawResponse(texto || "Hermes respondeu, mas sem conteúdo legível.");
+      }
+
+      setAnalysisDate(new Date());
+    } catch {
+      setErrorMessage("Não foi possível conectar ao Hermes. Tente novamente.");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
     <div className="max-w-6xl">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold">Ações sugeridas</h2>
-          <p className="mt-2 text-slate-400">
-            SDR simples para acompanhar orçamentos, retornos e revisões com
-            mensagens rápidas por WhatsApp.
-          </p>
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-500/15 text-sky-200 ring-1 ring-sky-400/30">
+              <Sparkles className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className="text-3xl font-bold">Hermes</h2>
+              <p className="mt-1 text-slate-400">
+                Assistente IA da sua oficina
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
-          <span className="font-semibold text-sky-300">{orders.length}</span> OS
-          analisadas
+          <span className="font-semibold text-sky-300">{metrics.totalOS}</span>{" "}
+          OS no sistema
         </div>
       </div>
 
-      {feedback && (
-        <div className="mb-6 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-200">
-          {feedback}
+      <section className="mb-6 rounded-2xl border border-sky-400/20 bg-sky-500/10 p-5 shadow-sm shadow-slate-950/20 sm:p-6">
+        <div className="flex gap-4">
+          <Brain className="mt-1 h-6 w-6 shrink-0 text-sky-200" aria-hidden="true" />
+          <p className="text-slate-200">
+            Hermes analisa os dados da sua oficina e sugere ações para você não
+            perder dinheiro, não esquecer OS e crescer com mais controle.
+          </p>
+        </div>
+      </section>
+
+      {!hasData && (
+        <div className="mb-6 rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          Cadastre clientes e abra OS para o Hermes ter dados para analisar.
         </div>
       )}
 
-      <div className="grid gap-6">
+      {errorMessage && (
+        <div className="mb-6 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {errorMessage}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => void analyzeWorkshop()}
+        disabled={!hasData || isLoading}
+        className="mb-6 inline-flex items-center gap-3 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {isLoading && (
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+        )}
+        {isLoading
+          ? "Hermes está analisando sua oficina..."
+          : "Analisar minha oficina agora"}
+      </button>
+
+      {rawResponse && (
         <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm shadow-slate-950/20 sm:p-6">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <span className="text-sm font-semibold uppercase text-amber-300">
-                Orçamentos pendentes
-              </span>
-              <h3 className="mt-1 text-xl font-bold">
-                OS aguardando aprovação
-              </h3>
-            </div>
-            <span className="rounded-full bg-amber-500/15 px-3 py-1 text-sm font-medium text-amber-200 ring-1 ring-amber-400/30">
-              {pendingBudgets.length} pendente(s)
-            </span>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {pendingBudgets.length ? (
-              pendingBudgets.map((order) => (
-                <article
-                  key={order.id}
-                  className="rounded-xl border border-slate-800 bg-slate-950 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="font-semibold text-slate-100">
-                        {order.cliente}
-                      </h4>
-                      <p className="text-sm text-slate-400">
-                        {order.id} · {order.veiculo}
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-amber-500/15 px-2 py-1 text-xs text-amber-200">
-                      {formatDate(order.criadoEm)}
-                    </span>
-                  </div>
-
-                  <p className="mt-3 line-clamp-2 text-sm text-slate-400">
-                    {order.servicoInicial || "Orçamento aguardando retorno."}
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() => sendBudgetReminder(order)}
-                    className="mt-4 w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
-                  >
-                    Enviar lembrete
-                  </button>
-                </article>
-              ))
-            ) : (
-              <p className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400 md:col-span-2 xl:col-span-3">
-                Nenhum orçamento pendente no momento.
-              </p>
-            )}
-          </div>
+          <h3 className="text-xl font-bold">Resposta do Hermes</h3>
+          <p className="mt-4 whitespace-pre-wrap text-sm text-slate-300">
+            {rawResponse}
+          </p>
         </section>
+      )}
 
-        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm shadow-slate-950/20 sm:p-6">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <span className="text-sm font-semibold uppercase text-sky-300">
-                Clientes sem retorno
-              </span>
-              <h3 className="mt-1 text-xl font-bold">
-                Fora das últimas {RECENT_OS_LIMIT} OS
-              </h3>
-            </div>
-            <span className="rounded-full bg-sky-500/15 px-3 py-1 text-sm font-medium text-sky-200 ring-1 ring-sky-400/30">
-              {clientsWithoutReturn.length} cliente(s)
-            </span>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {clientsWithoutReturn.length ? (
-              clientsWithoutReturn.map((cliente) => (
-                <article
-                  key={cliente.id}
-                  className="rounded-xl border border-slate-800 bg-slate-950 p-4"
-                >
-                  <h4 className="font-semibold text-slate-100">{cliente.nome}</h4>
-                  <p className="mt-1 text-sm text-slate-400">
-                    {formatPhone(cliente.telefone) || "Sem telefone"} ·{" "}
-                    {cliente.cidade || "Cidade não informada"}
-                  </p>
-                  <p className="mt-3 text-sm text-slate-500">
-                    {cliente.quantidadeVeiculos} veículo(s) cadastrado(s)
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() => contactClient(cliente)}
-                    className="mt-4 w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
-                  >
-                    Entrar em contato
-                  </button>
-                </article>
-              ))
-            ) : (
-              <p className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400 md:col-span-2 xl:col-span-3">
-                Todos os clientes aparecem nas últimas OS ou ainda não há clientes
-                cadastrados.
+      {result && (
+        <div className="space-y-6">
+          <div className="grid gap-5 lg:grid-cols-2">
+            <article className="rounded-2xl border border-sky-400/20 bg-sky-500/10 p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <Activity className="h-5 w-5 text-sky-200" aria-hidden="true" />
+                <h3 className="text-xl font-bold">Situação da oficina</h3>
+              </div>
+              <p className="text-sm text-slate-200">
+                {result.resumo || "Sem resumo disponível."}
               </p>
+            </article>
+
+            <article className="rounded-2xl border border-amber-400/20 bg-amber-500/10 p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <AlertTriangle
+                  className="h-5 w-5 text-amber-200"
+                  aria-hidden="true"
+                />
+                <h3 className="text-xl font-bold">Alertas — requer atenção</h3>
+              </div>
+              <ResultList
+                items={result.alertas || []}
+                fallback="Nenhum alerta crítico no momento"
+              />
+            </article>
+
+            <article className="rounded-2xl border border-sky-400/20 bg-sky-500/10 p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <Lightbulb className="h-5 w-5 text-sky-200" aria-hidden="true" />
+                <h3 className="text-xl font-bold">Insights</h3>
+              </div>
+              <ResultList
+                items={result.insights || []}
+                fallback="Sem insights suficientes por enquanto."
+              />
+            </article>
+
+            <article className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <Target className="h-5 w-5 text-emerald-200" aria-hidden="true" />
+                <h3 className="text-xl font-bold">Recomendações</h3>
+              </div>
+              <ResultList
+                items={result.recomendacoes || []}
+                fallback="Sem recomendações suficientes por enquanto."
+              />
+            </article>
+          </div>
+
+          <footer className="rounded-2xl border border-slate-800 bg-slate-900 p-5 text-sm text-slate-400">
+            {analysisDate && (
+              <p>Análise gerada em {formatAnalysisDate(analysisDate)}</p>
             )}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-sm shadow-slate-950/20 sm:p-6">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <span className="text-sm font-semibold uppercase text-violet-300">
-                Revisões sugeridas
-              </span>
-              <h3 className="mt-1 text-xl font-bold">
-                OS com mais de {OLD_OS_DAYS} dias
-              </h3>
-            </div>
-            <span className="rounded-full bg-violet-500/15 px-3 py-1 text-sm font-medium text-violet-200 ring-1 ring-violet-400/30">
-              {oldOrders.length} revisão(ões)
-            </span>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {oldOrders.length ? (
-              oldOrders.map((order) => (
-                <article
-                  key={order.id}
-                  className="rounded-xl border border-slate-800 bg-slate-950 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="font-semibold text-slate-100">
-                        {order.cliente}
-                      </h4>
-                      <p className="text-sm text-slate-400">
-                        {order.veiculo} · {order.placa || "Sem placa"}
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-violet-500/15 px-2 py-1 text-xs text-violet-200">
-                      {getDaysSince(order.criadoEm)} dias
-                    </span>
-                  </div>
-
-                  <p className="mt-3 text-sm text-slate-500">
-                    Última OS: {order.id} em {formatDate(order.criadoEm)}
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() => remindReview(order)}
-                    className="mt-4 w-full rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
-                  >
-                    Lembrar cliente
-                  </button>
-                </article>
-              ))
-            ) : (
-              <p className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400 md:col-span-2 xl:col-span-3">
-                Nenhuma OS antiga o suficiente para sugerir revisão.
-              </p>
-            )}
-          </div>
-        </section>
-      </div>
+            <button
+              type="button"
+              onClick={() => void analyzeWorkshop()}
+              disabled={isLoading}
+              className="mt-4 rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Atualizar análise
+            </button>
+            <p className="mt-4 text-xs text-slate-500">
+              Hermes analisa os dados salvos localmente. Os resultados são
+              sugestões — a decisão final é sempre sua.
+            </p>
+          </footer>
+        </div>
+      )}
     </div>
   );
 }

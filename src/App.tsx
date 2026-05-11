@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { LogOut } from "lucide-react";
+import { LogOut, Sparkles } from "lucide-react";
 import {
   BrowserRouter,
   Link,
@@ -38,6 +38,7 @@ import {
 type MenuItem = {
   label: string;
   path: string;
+  icon?: "hermes";
 };
 
 const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
@@ -49,7 +50,7 @@ const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
     { label: "Compras", path: "/compras" },
     { label: "Fornecedores", path: "/fornecedores" },
     { label: "Estoque", path: "/estoque" },
-    { label: "SDR", path: "/sdr" },
+    { label: "Hermes", path: "/sdr", icon: "hermes" },
     { label: "Configurações", path: "/configuracoes" },
   ],
   mecanico: [
@@ -64,7 +65,7 @@ const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
     { label: "Veículos", path: "/veiculos" },
     { label: "Ordens de Serviço", path: "/os" },
     { label: "Orçamentos", path: "/orcamentos" },
-    { label: "SDR", path: "/sdr" },
+    { label: "Hermes", path: "/sdr", icon: "hermes" },
   ],
   compras: [
     { label: "Dashboard", path: "/dashboard" },
@@ -184,12 +185,15 @@ function AppContent() {
                   key={`${currentRole}-${item.path}-${item.label}`}
                   to={item.path}
                   onClick={() => setIsSidebarOpen(false)}
-                  className={`block rounded-lg px-4 py-2 text-sm transition ${
+                  className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm transition ${
                     isActive
                       ? "bg-sky-500 font-medium text-white"
                       : "text-slate-300 hover:bg-slate-800"
                   }`}
                 >
+                  {item.icon === "hermes" && (
+                    <Sparkles className="h-4 w-4" aria-hidden="true" />
+                  )}
                   {item.label}
                 </Link>
               );
