@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { FileText } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import ReciboOS from "../../components/ReciboOS";
 import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import {
@@ -177,6 +179,21 @@ function formatCurrency(value: number) {
     style: "currency",
     currency: "BRL",
   });
+}
+
+function normalizeReceiptPaymentMethod(
+  value: string,
+): ServiceOrder["formaPagamentoEscolhida"] {
+  if (
+    value === "Pix" ||
+    value === "Dinheiro" ||
+    value === "Débito" ||
+    value === "Crédito"
+  ) {
+    return value;
+  }
+
+  return "";
 }
 
 function formatDate(value: string) {
@@ -541,6 +558,7 @@ export default function OSDetail() {
   const [saveMessage, setSaveMessage] = useState("");
   const [showBudgetActions, setShowBudgetActions] = useState(false);
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
+  const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>(() =>
     getDefaultDetailTab(),
   );
@@ -760,6 +778,94 @@ export default function OSDetail() {
 
     return { partsTotal, laborTotal, discountAmount, finalTotal };
   }, [discountType, discountValue, laborLines, partLines]);
+  const receiptOrder = useMemo<ServiceOrder | undefined>(() => {
+    if (!order) {
+      return undefined;
+    }
+
+    return {
+      ...order,
+      status,
+      cliente: clientName,
+      telefone: onlyDigits(clientPhone),
+      veiculo: [vehicleBrand, vehicleModel, vehicleYear].filter(Boolean).join(" "),
+      placa: vehiclePlate,
+      clienteNome: clientName,
+      clienteTelefone: onlyDigits(clientPhone),
+      veiculoMarca: vehicleBrand,
+      veiculoModelo: vehicleModel,
+      veiculoAno: vehicleYear,
+      veiculoPlaca: vehiclePlate,
+      formaPagamentoEscolhida: normalizeReceiptPaymentMethod(paymentMethod),
+      clienteDados: {
+        ...order.clienteDados,
+        nome: clientName,
+        telefone: onlyDigits(clientPhone),
+        cpf: onlyDigits(clientCpf),
+        cnpj: onlyDigits(clientCnpj),
+        email: clientEmail,
+      },
+      veiculoDados: {
+        ...order.veiculoDados,
+        marca: vehicleBrand,
+        modelo: vehicleModel,
+        ano: vehicleYear,
+        placa: vehiclePlate,
+        motor: vehicleMotor,
+        combustivel: vehicleFuel,
+        chassiVin: vehicleVin,
+        kmAtual: vehicleKm,
+      },
+      pecasNecessarias: partLines.map((part) => ({
+        id: part.id,
+        peca: part.name.trim(),
+        quantidade: toNumber(part.quantity),
+        valorUnitario: toNumber(part.unitValue),
+        valorTotal: toNumber(part.quantity) * toNumber(part.unitValue),
+        compraId: part.compraId,
+        origemChecklist: part.generatedFromChecklist,
+      })),
+      servicosMaoDeObra: laborLines.map((line) => ({
+        id: line.id,
+        servico: line.service.trim(),
+        descricao: line.description.trim(),
+        valor: toNumber(line.value),
+      })),
+      orcamento: {
+        ...order.orcamento,
+        totalPecas: totals.partsTotal,
+        totalMaoDeObra: totals.laborTotal,
+        descontoValor: toNumber(discountValue),
+        descontoTipo: discountType,
+        descontoAplicado: totals.discountAmount,
+        formaPagamento: paymentMethod,
+        totalFinal: totals.finalTotal,
+      },
+    };
+  }, [
+    clientCnpj,
+    clientCpf,
+    clientEmail,
+    clientName,
+    clientPhone,
+    discountType,
+    discountValue,
+    laborLines,
+    order,
+    partLines,
+    paymentMethod,
+    status,
+    totals,
+    vehicleBrand,
+    vehicleFuel,
+    vehicleKm,
+    vehicleModel,
+    vehicleMotor,
+    vehiclePlate,
+    vehicleVin,
+    vehicleYear,
+  ]);
+  const canGenerateReceipt = status === "FINALIZADA" || status === "ENTREGUE";
   const depositSummary = useMemo(() => {
     if (!requiresDeposit) {
       return {
@@ -1963,6 +2069,17 @@ export default function OSDetail() {
             </button>
           )}
 
+          {canGenerateReceipt && (
+            <button
+              type="button"
+              onClick={() => setIsReceiptModalOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              <FileText className="h-4 w-4" aria-hidden="true" />
+              Gerar recibo
+            </button>
+          )}
+
           {status !== "CANCELADA" && status !== "ENTREGUE" && (
             <button
               type="button"
@@ -2725,6 +2842,47 @@ export default function OSDetail() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isReceiptModalOpen && receiptOrder && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/90 px-4 py-6 backdrop-blur">
+          <div className="mx-auto max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl shadow-slate-950/50">
+            <div className="no-print sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 text-slate-950">
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-500">
+                  Recibo
+                </p>
+                <h3 className="text-xl font-bold">
+                  OS {receiptOrder.codigo || receiptOrder.id}
+                </h3>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-400"
+                >
+                  Imprimir / Salvar PDF
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsReceiptModalOpen(false)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+
+            <ReciboOS
+              order={receiptOrder}
+              oficina={oficinaConfig}
+              totals={totals}
+            />
           </div>
         </div>
       )}

@@ -165,7 +165,7 @@ function AppContent() {
       )}
 
       <aside
-        className={`fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-slate-800 bg-slate-900 p-6 transition-transform duration-200 lg:translate-x-0 ${
+        className={`no-print fixed left-0 top-0 z-40 flex h-screen w-64 flex-col border-r border-slate-800 bg-slate-900 p-6 transition-transform duration-200 lg:translate-x-0 ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -208,7 +208,7 @@ function AppContent() {
       </aside>
 
       <main className="min-h-screen p-4 lg:ml-64 lg:p-8">
-        <header className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900 px-5 py-4">
+        <header className="no-print mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900 px-5 py-4">
           <div className="flex items-center gap-3">
             <button
               type="button"
