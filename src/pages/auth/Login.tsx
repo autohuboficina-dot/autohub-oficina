@@ -53,11 +53,15 @@ export default function Login() {
     if (data.user) {
       const { data: usuario } = await supabase
         .from("usuarios")
-        .select("perfil")
+        .select("nome, perfil")
         .eq("auth_user_id", data.user.id)
-        .maybeSingle<{ perfil: string | null }>();
+        .maybeSingle<{ nome: string | null; perfil: string | null }>();
 
       updateCurrentRole(normalizeRole(usuario?.perfil ?? null));
+
+      if (usuario?.nome) {
+        localStorage.setItem("autohub:usuario-nome", usuario.nome);
+      }
     }
 
     await refreshAuth();

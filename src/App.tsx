@@ -10,7 +10,6 @@ import {
 } from "react-router-dom";
 import {
   ROLE_LABELS,
-  USER_ROLES,
   type UserRole,
 } from "./accessControl";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
@@ -35,7 +34,6 @@ import SDR from "./pages/sdr/SDR";
 import {
   getConfiguracoesOficina,
   getCurrentRole,
-  updateCurrentRole,
 } from "./services/configuracoesService";
 
 type MenuItem = {
@@ -85,6 +83,10 @@ function getInitialRole() {
   return getCurrentRole();
 }
 
+function getStoredUserName() {
+  return localStorage.getItem("autohub:usuario-nome") || "Usuário";
+}
+
 function isActivePath(currentPath: string, itemPath: string) {
   if (itemPath === "/dashboard") {
     return currentPath === "/" || currentPath === "/dashboard";
@@ -93,9 +95,22 @@ function isActivePath(currentPath: string, itemPath: string) {
   return currentPath === itemPath || currentPath.startsWith(`${itemPath}/`);
 }
 
+function getRoleBadgeClass(role: UserRole) {
+  const badgeClasses: Record<UserRole, string> = {
+    admin: "bg-cyan-500/20 text-cyan-200 ring-cyan-400/30",
+    mecanico: "bg-emerald-500/20 text-emerald-200 ring-emerald-400/30",
+    atendimento: "bg-amber-500/20 text-amber-200 ring-amber-400/30",
+    compras: "bg-violet-500/20 text-violet-200 ring-violet-400/30",
+    financeiro: "bg-sky-500/20 text-sky-200 ring-sky-400/30",
+  };
+
+  return badgeClasses[role];
+}
+
 function AppContent() {
   const location = useLocation();
-  const [currentRole, setCurrentRole] = useState<UserRole>(getInitialRole);
+  const [currentRole] = useState<UserRole>(getInitialRole);
+  const [userName] = useState(getStoredUserName);
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -103,14 +118,10 @@ function AppContent() {
     location.pathname.startsWith("/orcamento/") ||
     location.pathname.startsWith("/fornecedor/cotacao/");
 
-  function handleRoleChange(role: UserRole) {
-    setCurrentRole(role);
-    updateCurrentRole(role);
-  }
-
   async function handleSignOut() {
     await supabase?.auth.signOut();
     localStorage.removeItem("autohub:perfil");
+    localStorage.removeItem("autohub:usuario-nome");
     window.location.href = "/login";
   }
 
@@ -199,29 +210,19 @@ function AppContent() {
 
             <div>
               <span className="text-xs font-semibold uppercase text-slate-500">
-                Perfil atual
+                Usuário logado
               </span>
-              <p className="mt-1 text-lg font-semibold text-slate-100">
-                {ROLE_LABELS[currentRole]}
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="text-lg font-semibold text-white">{userName}</p>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${getRoleBadgeClass(
+                    currentRole,
+                  )}`}
+                >
+                  {ROLE_LABELS[currentRole]}
+                </span>
+              </div>
             </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {USER_ROLES.map((role) => (
-              <button
-                key={role}
-                type="button"
-                onClick={() => handleRoleChange(role)}
-                className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
-                  currentRole === role
-                    ? "bg-sky-500 text-white"
-                    : "border border-slate-700 text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                {ROLE_LABELS[role]}
-              </button>
-            ))}
           </div>
         </header>
 
