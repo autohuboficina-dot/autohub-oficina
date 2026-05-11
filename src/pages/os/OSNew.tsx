@@ -64,6 +64,10 @@ function toNumber(value: string) {
 
 function registerInitialStockExit(order: ServiceOrder) {
   order.pecasNecessarias.forEach((part) => {
+    if (part.peca_cliente) {
+      return;
+    }
+
     baixarProdutoPorOS({
       nome: part.peca,
       quantidade: part.quantidade,

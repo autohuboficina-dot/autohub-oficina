@@ -545,7 +545,16 @@ async function syncServiceOrderItemsSupabase(
   return {
     ...order,
     pecasNecessarias: syncedItems.pecasNecessarias.length
-      ? syncedItems.pecasNecessarias
+      ? syncedItems.pecasNecessarias.map((syncedPart, index) => {
+          const localPart = order.pecasNecessarias[index];
+
+          return {
+            ...syncedPart,
+            peca_cliente: Boolean(localPart?.peca_cliente),
+            valorUnitario: localPart?.peca_cliente ? 0 : syncedPart.valorUnitario,
+            valorTotal: localPart?.peca_cliente ? 0 : syncedPart.valorTotal,
+          };
+        })
       : order.pecasNecessarias,
     servicosMaoDeObra: syncedItems.servicosMaoDeObra.length
       ? syncedItems.servicosMaoDeObra

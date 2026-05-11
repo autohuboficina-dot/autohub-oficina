@@ -25,6 +25,7 @@ type ApprovalItem = {
   titulo: string;
   detalhe: string;
   valor: number;
+  pecaCliente?: boolean;
 };
 
 type ChecklistVisualStatus = "OK" | "Atenção" | "Trocar";
@@ -48,6 +49,7 @@ type PublicBudget = {
     quantidade: number;
     valorUnitario: number;
     valorTotal: number;
+    pecaCliente: boolean;
   }[];
   servicos: {
     id: string;
@@ -80,6 +82,7 @@ type PublicBudgetResponse = {
     quantidade: number | null;
     valor_unitario: number | null;
     valor_total: number | null;
+    peca_cliente?: boolean | null;
   }[];
   servicos: {
     id: string;
@@ -126,8 +129,11 @@ function getApprovalItems(order: ServiceOrder): ApprovalItem[] {
       id: `peca-${part.id}`,
       tipo: "Peça" as const,
       titulo: part.peca || "Peça sem descrição",
-      detalhe: `${part.quantidade} x ${formatCurrency(part.valorUnitario)}`,
-      valor: part.valorTotal,
+      detalhe: part.peca_cliente
+        ? "Peça fornecida pelo cliente"
+        : `${part.quantidade} x ${formatCurrency(part.valorUnitario)}`,
+      valor: part.peca_cliente ? 0 : part.valorTotal,
+      pecaCliente: Boolean(part.peca_cliente),
     }));
 
   const labor = order.servicosMaoDeObra
@@ -297,8 +303,11 @@ async function fetchPublicBudget(id: string): Promise<PublicBudget | null> {
       id: part.id,
       nome: part.nome || "Peça sem descrição",
       quantidade,
-      valorUnitario,
-      valorTotal: Number(part.valor_total ?? quantidade * valorUnitario),
+      valorUnitario: part.peca_cliente ? 0 : valorUnitario,
+      valorTotal: part.peca_cliente
+        ? 0
+        : Number(part.valor_total ?? quantidade * valorUnitario),
+      pecaCliente: Boolean(part.peca_cliente),
     };
   });
 
@@ -309,7 +318,7 @@ async function fetchPublicBudget(id: string): Promise<PublicBudget | null> {
   }));
   const totalParts =
     Number(budget.totais?.total_pecas ?? 0) ||
-    parts.reduce((total, part) => total + part.valorTotal, 0);
+    parts.reduce((total, part) => total + (part.pecaCliente ? 0 : part.valorTotal), 0);
   const totalServices =
     Number(budget.totais?.total_servicos ?? 0) ||
     services.reduce((total, service) => total + service.valor, 0);
@@ -889,11 +898,20 @@ export default function OrcamentoView() {
                         {part.nome}
                       </p>
                       <p className="mt-1 text-sm text-slate-400">
-                        {part.quantidade} x {formatCurrency(part.valorUnitario)}
+                        {part.pecaCliente
+                          ? "Peça fornecida pelo cliente"
+                          : `${part.quantidade} x ${formatCurrency(part.valorUnitario)}`}
                       </p>
+                      {part.pecaCliente && (
+                        <p className="mt-1 text-xs text-amber-200">
+                          A oficina não se responsabiliza pela garantia desta peça.
+                        </p>
+                      )}
                     </div>
                     <strong className="text-sm text-slate-100">
-                      {formatCurrency(part.valorTotal)}
+                      {part.pecaCliente
+                        ? "Fornecida pelo cliente"
+                        : formatCurrency(part.valorTotal)}
                     </strong>
                   </div>
                 </div>
@@ -1351,12 +1369,19 @@ export default function OrcamentoView() {
                         <span className="mt-1 block text-sm text-slate-400">
                           {item.detalhe}
                         </span>
+                        {item.pecaCliente && (
+                          <span className="mt-1 block text-xs text-amber-200">
+                            A oficina não se responsabiliza pela garantia desta peça.
+                          </span>
+                        )}
                       </span>
                     </label>
 
                     <div className="flex items-center justify-between gap-3 sm:min-w-[190px] sm:justify-end">
                       <strong className="text-sm text-slate-100">
-                        {formatCurrency(item.valor)}
+                        {item.pecaCliente
+                          ? "Fornecida pelo cliente"
+                          : formatCurrency(item.valor)}
                       </strong>
                       {canEditItems && isSelected && (
                         <button

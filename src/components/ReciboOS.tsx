@@ -55,6 +55,9 @@ export default function ReciboOS({ order, oficina, totals }: ReciboOSProps) {
     order.formaPagamentoEscolhida || order.orcamento.formaPagamento || "";
   const shouldShowPartsTotal = totals.partsTotal > 0;
   const shouldShowDiscount = totals.discountAmount > 0;
+  const hasCustomerProvidedParts = order.pecasNecessarias.some(
+    (part) => part.peca_cliente,
+  );
 
   return (
     <div className="recibo-print-area bg-white p-8 text-black">
@@ -193,6 +196,7 @@ export default function ReciboOS({ order, oficina, totals }: ReciboOSProps) {
                   <tr key={part.id}>
                     <td className="border border-neutral-300 px-3 py-2">
                       {part.peca || "Peça sem descrição"}
+                      {part.peca_cliente ? " (fornecida pelo cliente)" : ""}
                     </td>
                     <td className="border border-neutral-300 px-3 py-2 text-right">
                       {Number(part.quantidade || 0)}
@@ -238,6 +242,12 @@ export default function ReciboOS({ order, oficina, totals }: ReciboOSProps) {
         </section>
 
         <footer className="mt-12 text-center">
+          {hasCustomerProvidedParts && (
+            <p className="mb-5 text-left text-xs">
+              * Peças marcadas como 'fornecidas pelo cliente' não possuem
+              garantia da oficina.
+            </p>
+          )}
           <p className="font-semibold">Agradecemos a preferência!</p>
           <p className="mt-2 text-sm">
             Data de emissão do recibo: {formatDate(new Date().toISOString())}

@@ -54,6 +54,7 @@ export type ServiceOrderPart = {
   quantidade: number;
   valorUnitario: number;
   valorTotal: number;
+  peca_cliente?: boolean;
   compraId?: string;
   custoFornecedorPeca?: number;
   markupPecasAplicado?: number;
@@ -791,7 +792,12 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
       solucaoRecomendada: "",
     },
     checklistInicial: order.checklistInicial ?? [],
-    pecasNecessarias: order.pecasNecessarias ?? [],
+    pecasNecessarias: (order.pecasNecessarias ?? []).map((part) => ({
+      ...part,
+      peca_cliente: Boolean(part.peca_cliente),
+      valorUnitario: part.peca_cliente ? 0 : Number(part.valorUnitario || 0),
+      valorTotal: part.peca_cliente ? 0 : Number(part.valorTotal || 0),
+    })),
     servicosMaoDeObra: order.servicosMaoDeObra ?? [],
     fotosOs,
     cotacaoFornecedorEscolhido: order.cotacaoFornecedorEscolhido ?? "",

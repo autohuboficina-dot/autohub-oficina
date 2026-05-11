@@ -56,6 +56,7 @@ type PartLine = {
   name: string;
   quantity: string;
   unitValue: string;
+  customerProvided: boolean;
   compraId?: string;
   supplierCost?: number;
   markupPercent?: number;
@@ -75,6 +76,7 @@ function getBudgetEditSnapshot(
       name: part.name.trim(),
       quantity: toNumber(part.quantity),
       unitValue: toNumber(part.unitValue),
+      customerProvided: part.customerProvided,
       compraId: part.compraId || "",
     })),
     labor: labor.map((line) => ({
@@ -306,7 +308,7 @@ function createQuoteWhatsappUrl(fornecedor: Fornecedor, message: string) {
 
 function getQuoteItemsFromOrder(order?: ServiceOrder): CotacaoPecaItem[] {
   return (order?.pecasNecessarias || [])
-    .filter((part) => part.peca.trim())
+    .filter((part) => part.peca.trim() && !part.peca_cliente)
     .map((part) => ({
       id: `peca-${part.id}`,
       peca: part.peca.trim(),
@@ -370,14 +372,15 @@ function createChecklistState(order: ServiceOrder | undefined, checklistItems: s
 
 function createPartLines(order?: ServiceOrder): PartLine[] {
   if (!order?.pecasNecessarias.length) {
-    return [{ id: 1, name: "", quantity: "1", unitValue: "" }];
+    return [{ id: 1, name: "", quantity: "1", unitValue: "", customerProvided: false }];
   }
 
   return order.pecasNecessarias.map((part) => ({
     id: part.id,
     name: part.peca,
     quantity: String(part.quantidade),
-    unitValue: String(part.valorUnitario),
+    unitValue: part.peca_cliente ? "0" : String(part.valorUnitario),
+    customerProvided: Boolean(part.peca_cliente),
     compraId: part.compraId,
     supplierCost: part.custoFornecedorPeca,
     markupPercent: part.markupPecasAplicado,
@@ -394,7 +397,11 @@ function syncStockForOrderParts(
     const previousPart = previousOrder?.pecasNecessarias.find(
       (currentPart) => currentPart.id === part.id,
     );
-    const quantityDelta = Number(part.quantidade || 0) - Number(previousPart?.quantidade || 0);
+    const currentQuantity = part.peca_cliente ? 0 : Number(part.quantidade || 0);
+    const previousQuantity = previousPart?.peca_cliente
+      ? 0
+      : Number(previousPart?.quantidade || 0);
+    const quantityDelta = currentQuantity - previousQuantity;
 
     if (quantityDelta > 0) {
       baixarProdutoPorOS({
@@ -418,7 +425,10 @@ function syncStockForOrderParts(
   });
 
   previousOrder?.pecasNecessarias.forEach((part) => {
-    if (currentOrder.pecasNecessarias.some((currentPart) => currentPart.id === part.id)) {
+    if (
+      part.peca_cliente ||
+      currentOrder.pecasNecessarias.some((currentPart) => currentPart.id === part.id)
+    ) {
       return;
     }
 
@@ -434,6 +444,10 @@ function syncStockForOrderParts(
 
 function revertStockForCanceledOrder(order: ServiceOrder) {
   order.pecasNecessarias.forEach((part) => {
+    if (part.peca_cliente) {
+      return;
+    }
+
     reverterBaixaProdutoPorOS({
       nome: part.peca,
       quantidade: part.quantidade,
@@ -918,12 +932,15 @@ export default function OSDetail() {
         id: part.id,
         peca: part.name.trim(),
         quantidade: toNumber(part.quantity),
-        valorUnitario: toNumber(part.unitValue),
-        valorTotal: toNumber(part.quantity) * toNumber(part.unitValue),
+        valorUnitario: part.customerProvided ? 0 : toNumber(part.unitValue),
+        valorTotal: part.customerProvided
+          ? 0
+          : toNumber(part.quantity) * toNumber(part.unitValue),
+        peca_cliente: part.customerProvided,
         compraId: part.compraId,
-        custoFornecedorPeca: part.supplierCost,
-        markupPecasAplicado: part.markupPercent,
-        valorComMarkup: part.markedUnitValue,
+        custoFornecedorPeca: part.customerProvided ? undefined : part.supplierCost,
+        markupPecasAplicado: part.customerProvided ? undefined : part.markupPercent,
+        valorComMarkup: part.customerProvided ? undefined : part.markedUnitValue,
         origemChecklist: part.generatedFromChecklist,
       })),
       servicosMaoDeObra: laborLines.map((line) => ({
@@ -1076,6 +1093,7 @@ export default function OSDetail() {
         name: "",
         quantity: "1",
         unitValue: "",
+        customerProvided: false,
       },
     ]);
   }
@@ -1095,11 +1113,24 @@ export default function OSDetail() {
   function updatePartLine(
     lineId: number,
     field: keyof Omit<PartLine, "id">,
-    value: string,
+    value: string | boolean,
   ) {
     setPartLines((lines) =>
       lines.map((line) =>
-        line.id === lineId ? { ...line, [field]: value } : line,
+        line.id === lineId
+          ? {
+              ...line,
+              [field]: value,
+              ...(field === "customerProvided" && value === true
+                ? {
+                    unitValue: "0",
+                    supplierCost: undefined,
+                    markupPercent: undefined,
+                    markedUnitValue: undefined,
+                  }
+                : {}),
+            }
+          : line,
       ),
     );
   }
@@ -1189,6 +1220,7 @@ export default function OSDetail() {
           name: `${item}: ${observacaoTecnica.trim()}`,
           quantity: "1",
           unitValue: "0",
+          customerProvided: false,
           generatedFromChecklist: item,
         },
       ];
@@ -1676,7 +1708,7 @@ export default function OSDetail() {
               part.id === partId ||
               part.peca.trim().toLowerCase() === cotacaoPart.peca.trim().toLowerCase();
 
-            if (!isSamePart) {
+            if (!isSamePart || part.peca_cliente) {
               return part;
             }
 
@@ -1797,7 +1829,7 @@ export default function OSDetail() {
     }));
     const pecasNecessarias = partLines.map((line) => {
       const quantidade = toNumber(line.quantity);
-      const valorUnitario = toNumber(line.unitValue);
+      const valorUnitario = line.customerProvided ? 0 : toNumber(line.unitValue);
       const existingPart = order.pecasNecessarias.find(
         (part) => part.id === line.id,
       );
@@ -1808,11 +1840,18 @@ export default function OSDetail() {
         peca: line.name.trim(),
         quantidade,
         valorUnitario,
-        valorTotal: quantidade * valorUnitario,
+        valorTotal: line.customerProvided ? 0 : quantidade * valorUnitario,
+        peca_cliente: line.customerProvided,
         compraId: line.compraId,
-        custoFornecedorPeca: line.supplierCost ?? existingPart?.custoFornecedorPeca,
-        markupPecasAplicado: line.markupPercent ?? existingPart?.markupPecasAplicado,
-        valorComMarkup: line.markedUnitValue ?? existingPart?.valorComMarkup,
+        custoFornecedorPeca: line.customerProvided
+          ? undefined
+          : line.supplierCost ?? existingPart?.custoFornecedorPeca,
+        markupPecasAplicado: line.customerProvided
+          ? undefined
+          : line.markupPercent ?? existingPart?.markupPecasAplicado,
+        valorComMarkup: line.customerProvided
+          ? undefined
+          : line.markedUnitValue ?? existingPart?.valorComMarkup,
         origemChecklist: line.generatedFromChecklist,
       };
     });
@@ -1961,18 +2000,19 @@ export default function OSDetail() {
           ...order,
           pecasNecessarias: partLines.map((line) => {
             const quantidade = toNumber(line.quantity);
-            const valorUnitario = toNumber(line.unitValue);
+            const valorUnitario = line.customerProvided ? 0 : toNumber(line.unitValue);
 
             return {
               id: line.id,
               peca: line.name.trim(),
               quantidade,
               valorUnitario,
-              valorTotal: quantidade * valorUnitario,
+              valorTotal: line.customerProvided ? 0 : quantidade * valorUnitario,
+              peca_cliente: line.customerProvided,
               compraId: line.compraId,
-              custoFornecedorPeca: line.supplierCost,
-              markupPecasAplicado: line.markupPercent,
-              valorComMarkup: line.markedUnitValue,
+              custoFornecedorPeca: line.customerProvided ? undefined : line.supplierCost,
+              markupPecasAplicado: line.customerProvided ? undefined : line.markupPercent,
+              valorComMarkup: line.customerProvided ? undefined : line.markedUnitValue,
               origemChecklist: line.generatedFromChecklist,
             };
           }),
@@ -2438,7 +2478,19 @@ export default function OSDetail() {
                   className="grid gap-3 border-t border-slate-800 py-4 md:grid-cols-[minmax(160px,2fr)_100px_130px_130px]"
                 >
                   <div>
-                    <label className={labelClass}>Peça {index + 1}</label>
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <label className="block text-sm font-medium text-slate-300">
+                        Peça {index + 1}
+                      </label>
+                      {line.customerProvided && (
+                        <span
+                          className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-200 ring-1 ring-amber-400/30"
+                          title="Peça fornecida pelo cliente — sem garantia da oficina"
+                        >
+                          Cliente
+                        </span>
+                      )}
+                    </div>
                     <input
                       className={compactInputClass}
                       placeholder="Pastilha de freio"
@@ -2471,6 +2523,7 @@ export default function OSDetail() {
                       className={compactInputClass}
                       placeholder="0,00"
                       value={line.unitValue}
+                      disabled={line.customerProvided}
                       onChange={(event) =>
                         updatePartLine(line.id, "unitValue", event.target.value)
                       }
@@ -2493,6 +2546,24 @@ export default function OSDetail() {
                     </div>
                   </div>
                   <div className="md:col-span-4">
+                    <label
+                      className="mb-3 flex w-fit items-center gap-2 text-sm font-medium text-amber-100"
+                      title="Peça fornecida pelo cliente — sem garantia da oficina"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={line.customerProvided}
+                        onChange={(event) =>
+                          updatePartLine(
+                            line.id,
+                            "customerProvided",
+                            event.target.checked,
+                          )
+                        }
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-amber-500"
+                      />
+                      Peça fornecida pelo cliente
+                    </label>
                     <button
                       type="button"
                       onClick={() => removePartLine(line.id)}
