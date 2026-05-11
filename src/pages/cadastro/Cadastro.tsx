@@ -127,6 +127,18 @@ export default function Cadastro() {
       return;
     }
 
+    const { data: signInData, error: signInError } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password: form.senha,
+      });
+
+    if (signInError || !signInData.session) {
+      setErrorMessage("Conta criada mas erro ao entrar. Tente fazer login.");
+      setIsLoading(false);
+      return;
+    }
+
     const { data: oficina, error: oficinaError } = await supabase
       .from("oficinas")
       .insert({
@@ -144,7 +156,7 @@ export default function Cadastro() {
 
     const { error: usuarioError } = await supabase.from("usuarios").insert({
       oficina_id: oficina.id,
-      auth_user_id: signUpData.user.id,
+      auth_user_id: signInData.session.user.id,
       nome: form.nomeUsuario.trim(),
       email,
       perfil: "admin",
