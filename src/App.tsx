@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LogOut } from "lucide-react";
 import {
   BrowserRouter,
   Link,
@@ -14,6 +15,7 @@ import {
 } from "./accessControl";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import { AuthProvider } from "./contexts/AuthContext";
+import { supabase } from "./lib/supabase";
 import Cadastro from "./pages/cadastro/Cadastro";
 import Clientes from "./pages/clientes/Clientes";
 import ClienteDetail from "./pages/clientes/ClienteDetail";
@@ -105,6 +107,12 @@ function AppContent() {
     updateCurrentRole(role);
   }
 
+  async function handleSignOut() {
+    await supabase?.auth.signOut();
+    localStorage.removeItem("autohub:perfil");
+    window.location.href = "/login";
+  }
+
   if (isPublicBudgetRoute) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -124,31 +132,42 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <aside className="fixed left-0 top-0 h-screen w-64 border-r border-slate-800 bg-slate-900 p-6">
-        <h1 className="text-xl font-bold text-sky-400">
-          {oficinaConfig.nomeOficina}
-        </h1>
-        <p className="mt-1 text-sm text-slate-400">Gestão inteligente</p>
+      <aside className="fixed left-0 top-0 flex h-screen w-64 flex-col border-r border-slate-800 bg-slate-900 p-6">
+        <div>
+          <h1 className="text-xl font-bold text-sky-400">
+            {oficinaConfig.nomeOficina}
+          </h1>
+          <p className="mt-1 text-sm text-slate-400">Gestão inteligente</p>
 
-        <nav className="mt-8 space-y-2">
-          {MENU_BY_ROLE[currentRole].map((item) => {
-            const isActive = isActivePath(location.pathname, item.path);
+          <nav className="mt-8 space-y-2">
+            {MENU_BY_ROLE[currentRole].map((item) => {
+              const isActive = isActivePath(location.pathname, item.path);
 
-            return (
-              <Link
-                key={`${currentRole}-${item.path}-${item.label}`}
-                to={item.path}
-                className={`block rounded-lg px-4 py-2 text-sm transition ${
-                  isActive
-                    ? "bg-sky-500 font-medium text-white"
-                    : "text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+              return (
+                <Link
+                  key={`${currentRole}-${item.path}-${item.label}`}
+                  to={item.path}
+                  className={`block rounded-lg px-4 py-2 text-sm transition ${
+                    isActive
+                      ? "bg-sky-500 font-medium text-white"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleSignOut}
+          className="mt-auto flex w-full items-center gap-3 rounded-lg px-4 py-2 text-left text-sm font-medium text-red-400 transition hover:bg-slate-800 hover:text-red-300"
+        >
+          <LogOut className="h-4 w-4" aria-hidden="true" />
+          Sair
+        </button>
       </aside>
 
       <main className="ml-64 min-h-screen p-8">
