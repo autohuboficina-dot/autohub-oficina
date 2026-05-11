@@ -57,6 +57,7 @@ type PartLine = {
   quantity: string;
   unitValue: string;
   customerProvided: boolean;
+  technicalNote: string;
   compraId?: string;
   supplierCost?: number;
   markupPercent?: number;
@@ -77,6 +78,7 @@ function getBudgetEditSnapshot(
       quantity: toNumber(part.quantity),
       unitValue: toNumber(part.unitValue),
       customerProvided: part.customerProvided,
+      technicalNote: part.technicalNote.trim(),
       compraId: part.compraId || "",
     })),
     labor: labor.map((line) => ({
@@ -372,7 +374,16 @@ function createChecklistState(order: ServiceOrder | undefined, checklistItems: s
 
 function createPartLines(order?: ServiceOrder): PartLine[] {
   if (!order?.pecasNecessarias.length) {
-    return [{ id: 1, name: "", quantity: "1", unitValue: "", customerProvided: false }];
+    return [
+      {
+        id: 1,
+        name: "",
+        quantity: "1",
+        unitValue: "",
+        customerProvided: false,
+        technicalNote: "",
+      },
+    ];
   }
 
   return order.pecasNecessarias.map((part) => ({
@@ -381,6 +392,7 @@ function createPartLines(order?: ServiceOrder): PartLine[] {
     quantity: String(part.quantidade),
     unitValue: part.peca_cliente ? "0" : String(part.valorUnitario),
     customerProvided: Boolean(part.peca_cliente),
+    technicalNote: part.observacao_tecnica ?? "",
     compraId: part.compraId,
     supplierCost: part.custoFornecedorPeca,
     markupPercent: part.markupPecasAplicado,
@@ -589,6 +601,13 @@ export default function OSDetail() {
     getVehicleField(order, "chassiVin") || getVehicleField(order, "chassi"),
   );
   const [vehicleKm, setVehicleKm] = useState(getVehicleField(order, "kmAtual"));
+  const [entryKm, setEntryKm] = useState(order?.km_entrada || "");
+  const [nextReviewKm, setNextReviewKm] = useState(
+    order?.proxima_revisao_km || "",
+  );
+  const [nextReviewDate, setNextReviewDate] = useState(
+    order?.proxima_revisao_data || "",
+  );
   const [status, setStatus] = useState<ServiceOrderStatus>(
     order?.status || "ABERTA",
   );
@@ -618,6 +637,9 @@ export default function OSDetail() {
   );
   const [recommendedSolution, setRecommendedSolution] = useState(
     order?.diagnostico.solucaoRecomendada || "",
+  );
+  const [technicalObservations, setTechnicalObservations] = useState(
+    order?.observacoes_tecnicas || "",
   );
   const [checklistState, setChecklistState] = useState<ChecklistFormState>(() =>
     createChecklistState(order, getChecklistItemsForOrder(order)),
@@ -773,6 +795,9 @@ export default function OSDetail() {
       setVehicleFuel(getVehicleField(order, "combustivel"));
       setVehicleVin(getVehicleField(order, "chassiVin") || getVehicleField(order, "chassi"));
       setVehicleKm(getVehicleField(order, "kmAtual"));
+      setEntryKm(order.km_entrada || getVehicleField(order, "kmAtual"));
+      setNextReviewKm(order.proxima_revisao_km || "");
+      setNextReviewDate(order.proxima_revisao_data || "");
       setStatus(order.status || "ABERTA");
       setApprovalStatus(order.statusAprovacao || "pendente");
       setApprovalConfirmationDate(order.dataConfirmacaoOficina || "");
@@ -782,6 +807,7 @@ export default function OSDetail() {
       setDefectFound(order.diagnostico.defeitoEncontrado || "");
       setProbableCause(order.diagnostico.causaProvavel || "");
       setRecommendedSolution(order.diagnostico.solucaoRecomendada || "");
+      setTechnicalObservations(order.observacoes_tecnicas || "");
       const nextChecklistItems = getChecklistItemsForOrder(order);
       setChecklistItems(nextChecklistItems);
       setChecklistState(createChecklistState(order, nextChecklistItems));
@@ -907,6 +933,9 @@ export default function OSDetail() {
       veiculoModelo: vehicleModel,
       veiculoAno: vehicleYear,
       veiculoPlaca: vehiclePlate,
+      km_entrada: entryKm,
+      proxima_revisao_km: nextReviewKm,
+      proxima_revisao_data: nextReviewDate,
       formaPagamentoEscolhida: normalizeReceiptPaymentMethod(paymentMethod),
       clienteDados: {
         ...order.clienteDados,
@@ -942,6 +971,7 @@ export default function OSDetail() {
         markupPecasAplicado: part.customerProvided ? undefined : part.markupPercent,
         valorComMarkup: part.customerProvided ? undefined : part.markedUnitValue,
         origemChecklist: part.generatedFromChecklist,
+        observacao_tecnica: part.technicalNote.trim(),
       })),
       servicosMaoDeObra: laborLines.map((line) => ({
         id: line.id,
@@ -959,6 +989,7 @@ export default function OSDetail() {
         formaPagamento: paymentMethod,
         totalFinal: totals.finalTotal,
       },
+      observacoes_tecnicas: technicalObservations.trim(),
     };
   }, [
     clientCnpj,
@@ -968,11 +999,15 @@ export default function OSDetail() {
     clientPhone,
     discountType,
     discountValue,
+    entryKm,
     laborLines,
+    nextReviewDate,
+    nextReviewKm,
     order,
     partLines,
     paymentMethod,
     status,
+    technicalObservations,
     totals,
     vehicleType,
     vehicleBrand,
@@ -1094,6 +1129,7 @@ export default function OSDetail() {
         quantity: "1",
         unitValue: "",
         customerProvided: false,
+        technicalNote: "",
       },
     ]);
   }
@@ -1221,6 +1257,7 @@ export default function OSDetail() {
           quantity: "1",
           unitValue: "0",
           customerProvided: false,
+          technicalNote: "",
           generatedFromChecklist: item,
         },
       ];
@@ -1853,6 +1890,7 @@ export default function OSDetail() {
           ? undefined
           : line.markedUnitValue ?? existingPart?.valorComMarkup,
         origemChecklist: line.generatedFromChecklist,
+        observacao_tecnica: line.technicalNote.trim(),
       };
     });
     const servicosMaoDeObra = laborLines.map((line) => ({
@@ -1902,6 +1940,9 @@ export default function OSDetail() {
       clienteNome: clientName.trim(),
       clienteTelefone: clientPhoneDigits,
       veiculoId: selectedVehicleId || order.veiculoId,
+      km_entrada: entryKm.trim(),
+      proxima_revisao_km: nextReviewKm.trim(),
+      proxima_revisao_data: nextReviewDate,
       veiculoTipo: vehicleType,
       veiculoMarca: vehicleBrand.trim(),
       veiculoModelo: vehicleModel.trim(),
@@ -1934,6 +1975,7 @@ export default function OSDetail() {
         causaProvavel: probableCause.trim(),
         solucaoRecomendada: recommendedSolution.trim(),
       },
+      observacoes_tecnicas: technicalObservations.trim(),
       checklistInicial,
       pecasNecessarias,
       servicosMaoDeObra,
@@ -2014,6 +2056,7 @@ export default function OSDetail() {
               markupPecasAplicado: line.customerProvided ? undefined : line.markupPercent,
               valorComMarkup: line.customerProvided ? undefined : line.markedUnitValue,
               origemChecklist: line.generatedFromChecklist,
+              observacao_tecnica: line.technicalNote.trim(),
             };
           }),
           servicosMaoDeObra: laborLines.map((line) => ({
@@ -2546,6 +2589,21 @@ export default function OSDetail() {
                     </div>
                   </div>
                   <div className="md:col-span-4">
+                    <div className="mb-3">
+                      <label className={labelClass}>Especificação / observação</label>
+                      <input
+                        className={compactInputClass}
+                        placeholder="Ex: 5W30 sintético, medida 205/55R16, código OBD P0301..."
+                        value={line.technicalNote}
+                        onChange={(event) =>
+                          updatePartLine(
+                            line.id,
+                            "technicalNote",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </div>
                     <label
                       className="mb-3 flex w-fit items-center gap-2 text-sm font-medium text-amber-100"
                       title="Peça fornecida pelo cliente — sem garantia da oficina"
@@ -3270,6 +3328,40 @@ export default function OSDetail() {
                     value={vehicleKm}
                   />
                 </div>
+
+                <div>
+                  <label className={labelClass}>KM de entrada</label>
+                  <input
+                    type="number"
+                    min="0"
+                    className={inputClass}
+                    placeholder="Ex: 45230"
+                    value={entryKm}
+                    onChange={(event) => setEntryKm(event.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass}>Próxima revisão — KM</label>
+                  <input
+                    type="number"
+                    min="0"
+                    className={inputClass}
+                    placeholder="Ex: 50000"
+                    value={nextReviewKm}
+                    onChange={(event) => setNextReviewKm(event.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className={labelClass}>Próxima revisão — Data</label>
+                  <input
+                    type="date"
+                    className={inputClass}
+                    value={nextReviewDate}
+                    onChange={(event) => setNextReviewDate(event.target.value)}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -3291,6 +3383,25 @@ export default function OSDetail() {
             placeholder="Ex: barulho ao frear, luz acesa no painel, perda de potência."
             value={problemReport}
             onChange={(event) => setProblemReport(event.target.value)}
+          />
+        </section>
+        )}
+
+        {activeTab === "diagnostico" && (
+        <section className={sectionClass}>
+          <h3 className="text-2xl font-bold">Observações técnicas</h3>
+          <p className="mt-2 text-sm text-slate-400">
+            Use este campo para registrar informações que o sistema ainda não
+            captura automaticamente: códigos OBD, posição de peças, serviços
+            terceirizados, medidas técnicas, etc.
+          </p>
+
+          <textarea
+            rows={4}
+            className={`${inputClass} mt-5`}
+            placeholder="Ex: Código OBD P0301 detectado. Pneu dianteiro esquerdo 205/55R16. Cabeçote enviado para retífica em 10/05. Tensão da corrente medida: 15mm folga."
+            value={technicalObservations}
+            onChange={(event) => setTechnicalObservations(event.target.value)}
           />
         </section>
         )}

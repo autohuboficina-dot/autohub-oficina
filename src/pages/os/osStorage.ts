@@ -55,6 +55,7 @@ export type ServiceOrderPart = {
   valorUnitario: number;
   valorTotal: number;
   peca_cliente?: boolean;
+  observacao_tecnica?: string;
   compraId?: string;
   custoFornecedorPeca?: number;
   markupPecasAplicado?: number;
@@ -145,6 +146,9 @@ export type ServiceOrder = {
   clienteNome: string;
   clienteTelefone: string;
   veiculoId: string;
+  km_entrada: string;
+  proxima_revisao_km: string;
+  proxima_revisao_data: string;
   veiculoTipo: string;
   veiculoMarca: string;
   veiculoModelo: string;
@@ -177,6 +181,7 @@ export type ServiceOrder = {
     causaProvavel: string;
     solucaoRecomendada: string;
   };
+  observacoes_tecnicas: string;
   checklistInicial: ServiceOrderChecklistItem[];
   pecasNecessarias: ServiceOrderPart[];
   servicosMaoDeObra: ServiceOrderLabor[];
@@ -493,6 +498,9 @@ export const exampleOrders: ServiceOrder[] = [
     clienteNome: "Carlos Henrique",
     clienteTelefone: "(11) 99999-9999",
     veiculoId: "",
+    km_entrada: "",
+    proxima_revisao_km: "",
+    proxima_revisao_data: "",
     veiculoTipo: "Carro",
     veiculoMarca: "Honda",
     veiculoModelo: "Civic",
@@ -528,6 +536,7 @@ export const exampleOrders: ServiceOrder[] = [
       causaProvavel: "",
       solucaoRecomendada: "",
     },
+    observacoes_tecnicas: "",
     checklistInicial: [],
     pecasNecessarias: [],
     servicosMaoDeObra: [],
@@ -595,6 +604,9 @@ export const exampleOrders: ServiceOrder[] = [
     clienteNome: "Mariana Souza",
     clienteTelefone: "(21) 98888-7777",
     veiculoId: "",
+    km_entrada: "",
+    proxima_revisao_km: "",
+    proxima_revisao_data: "",
     veiculoTipo: "Carro",
     veiculoMarca: "Fiat",
     veiculoModelo: "Argo",
@@ -630,6 +642,7 @@ export const exampleOrders: ServiceOrder[] = [
       causaProvavel: "",
       solucaoRecomendada: "",
     },
+    observacoes_tecnicas: "",
     checklistInicial: [],
     pecasNecessarias: [],
     servicosMaoDeObra: [],
@@ -753,6 +766,9 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
     clienteTelefone:
       order.clienteTelefone ?? order.clienteDados?.telefone ?? order.telefone,
     veiculoId: order.veiculoId ?? "",
+    km_entrada: order.km_entrada ?? order.veiculoDados?.kmAtual ?? "",
+    proxima_revisao_km: order.proxima_revisao_km ?? "",
+    proxima_revisao_data: order.proxima_revisao_data ?? "",
     veiculoTipo: order.veiculoTipo ?? order.veiculoDados?.tipo_veiculo ?? "Carro",
     veiculoMarca: order.veiculoMarca ?? order.veiculoDados?.marca ?? "",
     veiculoModelo: order.veiculoModelo ?? order.veiculoDados?.modelo ?? order.veiculo,
@@ -791,12 +807,14 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
       causaProvavel: "",
       solucaoRecomendada: "",
     },
+    observacoes_tecnicas: order.observacoes_tecnicas ?? "",
     checklistInicial: order.checklistInicial ?? [],
     pecasNecessarias: (order.pecasNecessarias ?? []).map((part) => ({
       ...part,
       peca_cliente: Boolean(part.peca_cliente),
       valorUnitario: part.peca_cliente ? 0 : Number(part.valorUnitario || 0),
       valorTotal: part.peca_cliente ? 0 : Number(part.valorTotal || 0),
+      observacao_tecnica: part.observacao_tecnica ?? "",
     })),
     servicosMaoDeObra: order.servicosMaoDeObra ?? [],
     fotosOs,

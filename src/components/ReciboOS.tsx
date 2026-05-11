@@ -32,6 +32,16 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR").format(date);
 }
 
+function formatNumber(value: string | number) {
+  const numberValue = Number(value || 0);
+
+  if (!numberValue) {
+    return "";
+  }
+
+  return new Intl.NumberFormat("pt-BR").format(numberValue);
+}
+
 function getVehicleDescription(order: ServiceOrder) {
   return [
     order.veiculoDados.marca || order.veiculoMarca,
@@ -51,6 +61,14 @@ export default function ReciboOS({ order, oficina, totals }: ReciboOSProps) {
   const vehicleDescription = getVehicleDescription(order) || order.veiculo || "-";
   const vehiclePlate =
     order.veiculoDados.placa || order.veiculoPlaca || order.placa || "-";
+  const entryKm = formatNumber(order.km_entrada);
+  const nextReviewKm = formatNumber(order.proxima_revisao_km);
+  const nextReviewDate = order.proxima_revisao_data
+    ? formatDate(order.proxima_revisao_data)
+    : "";
+  const nextReviewText = [nextReviewKm ? `${nextReviewKm} km` : "", nextReviewDate]
+    .filter(Boolean)
+    .join(" ou ");
   const paymentMethod =
     order.formaPagamentoEscolhida || order.orcamento.formaPagamento || "";
   const shouldShowPartsTotal = totals.partsTotal > 0;
@@ -126,6 +144,7 @@ export default function ReciboOS({ order, oficina, totals }: ReciboOSProps) {
             <h2 className="text-sm font-bold uppercase">Dados do veículo</h2>
             <p className="mt-2">Veículo: {vehicleDescription}</p>
             <p>Placa: {vehiclePlate}</p>
+            {entryKm && <p>KM de entrada: {entryKm} km</p>}
           </div>
         </section>
 
@@ -241,7 +260,21 @@ export default function ReciboOS({ order, oficina, totals }: ReciboOSProps) {
           </div>
         </section>
 
+        {order.observacoes_tecnicas && (
+          <section className="mt-6 border-t border-neutral-300 pt-5">
+            <h2 className="text-sm font-bold uppercase">Observações técnicas</h2>
+            <p className="mt-2 whitespace-pre-wrap text-sm">
+              {order.observacoes_tecnicas}
+            </p>
+          </section>
+        )}
+
         <footer className="mt-12 text-center">
+          {nextReviewText && (
+            <p className="mb-5 text-sm">
+              Próxima revisão recomendada: {nextReviewText}
+            </p>
+          )}
           {hasCustomerProvidedParts && (
             <p className="mb-5 text-left text-xs">
               * Peças marcadas como 'fornecidas pelo cliente' não possuem

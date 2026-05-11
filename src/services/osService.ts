@@ -25,6 +25,10 @@ type OrdemServicoSupabaseRow = {
     defeitoEncontrado?: string;
     causaProvavel?: string;
     solucaoRecomendada?: string;
+    observacoes_tecnicas?: string;
+    km_entrada?: string;
+    proxima_revisao_km?: string;
+    proxima_revisao_data?: string;
   } | null;
   created_at: string;
   updated_at: string;
@@ -162,6 +166,9 @@ function createEmptyOrderFromSupabase(row: OrdemServicoSupabaseRow): ServiceOrde
     clienteNome,
     clienteTelefone,
     veiculoId: row.veiculo_id,
+    km_entrada: row.diagnostico?.km_entrada ?? "",
+    proxima_revisao_km: row.diagnostico?.proxima_revisao_km ?? "",
+    proxima_revisao_data: row.diagnostico?.proxima_revisao_data ?? "",
     veiculoTipo: veiculo?.tipo_veiculo ?? "Carro",
     veiculoMarca: veiculo?.marca ?? "",
     veiculoModelo: veiculo?.modelo ?? "",
@@ -194,6 +201,7 @@ function createEmptyOrderFromSupabase(row: OrdemServicoSupabaseRow): ServiceOrde
       causaProvavel: row.diagnostico?.causaProvavel ?? "",
       solucaoRecomendada: row.diagnostico?.solucaoRecomendada ?? "",
     },
+    observacoes_tecnicas: row.diagnostico?.observacoes_tecnicas ?? "",
     checklistInicial: [],
     pecasNecessarias: [],
     servicosMaoDeObra: [],
@@ -243,7 +251,13 @@ function mapOrderToSupabase(oficinaId: string, order: ServiceOrder) {
     status: order.status || "ABERTA",
     problema_relatado: order.problemaRelatado || order.servicoInicial,
     observacao: order.observacao,
-    diagnostico: order.diagnostico,
+    diagnostico: {
+      ...order.diagnostico,
+      observacoes_tecnicas: order.observacoes_tecnicas,
+      km_entrada: order.km_entrada,
+      proxima_revisao_km: order.proxima_revisao_km,
+      proxima_revisao_data: order.proxima_revisao_data,
+    },
   };
 }
 
@@ -551,6 +565,7 @@ async function syncServiceOrderItemsSupabase(
           return {
             ...syncedPart,
             peca_cliente: Boolean(localPart?.peca_cliente),
+            observacao_tecnica: localPart?.observacao_tecnica ?? "",
             valorUnitario: localPart?.peca_cliente ? 0 : syncedPart.valorUnitario,
             valorTotal: localPart?.peca_cliente ? 0 : syncedPart.valorTotal,
           };
