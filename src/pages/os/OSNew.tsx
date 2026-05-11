@@ -12,6 +12,7 @@ import {
   calculatePaymentSimulation,
   getConfiguracoesOficina,
 } from "../../services/configuracoesService";
+import { baixarProdutoPorOS } from "../../services/estoqueService";
 import { getChecklistConfig } from "../../services/checklistConfigService";
 import {
   createServiceOrderTimelineEvent,
@@ -59,6 +60,18 @@ function createInitialChecklistState(checklistItems: string[]) {
 
 function toNumber(value: string) {
   return Number(value || 0);
+}
+
+function registerInitialStockExit(order: ServiceOrder) {
+  order.pecasNecessarias.forEach((part) => {
+    baixarProdutoPorOS({
+      nome: part.peca,
+      quantidade: part.quantidade,
+      osCodigo: order.codigo,
+      observacao: `Peça adicionada à OS ${order.codigo}.`,
+      movimentacaoId: `os-saida-${order.codigo}-${part.id}-0-${part.quantidade}`,
+    });
+  });
 }
 
 function getSingleVehicleId(clientes: Cliente[], clienteId: string) {
@@ -492,6 +505,7 @@ export default function OSNew() {
         ...getStoredOrders().filter((order) => order.id !== savedOrder.id),
         savedOrder,
       ]);
+      registerInitialStockExit(savedOrder);
       setSavedOrderId(savedOrder.codigo);
       setSavedBudgetToken(savedOrder.orcamento.publicToken || "");
       setSaveMessage(`OS ${savedOrder.codigo} salva com sucesso.`);

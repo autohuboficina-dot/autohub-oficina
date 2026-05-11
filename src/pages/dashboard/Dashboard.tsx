@@ -1,8 +1,8 @@
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ROLE_LABELS, type UserRole } from "../../accessControl";
 import { getClientes } from "../../services/clientesService";
 import { getCotacoes } from "../../services/cotacoesService";
-import { getEstoque } from "../../services/estoqueService";
+import { getProdutosEstoque } from "../../services/estoqueService";
 import { getStoredOrders } from "../../services/osService";
 
 type DashboardProps = {
@@ -14,6 +14,7 @@ type MetricCard = {
   value: string;
   hint: string;
   tone?: "sky" | "emerald" | "amber" | "red" | "violet";
+  path?: string;
 };
 
 type DashboardLocationState = {
@@ -56,7 +57,7 @@ function createMetrics(role: UserRole): MetricCard[] {
   const orders = getStoredOrders();
   const clientes = getClientes();
   const cotacoes = getCotacoes();
-  const estoque = getEstoque();
+  const produtos = getProdutosEstoque();
   const openOrders = orders.filter(
     (order) => order.status !== "FINALIZADA" && order.status !== "CANCELADA",
   );
@@ -74,7 +75,9 @@ function createMetrics(role: UserRole): MetricCard[] {
       cotacao.status !== "Compra confirmada com fornecedor" &&
       cotacao.status !== "Cancelada",
   );
-  const estoqueBaixo = estoque.filter((item) => item.quantidade <= 1);
+  const estoqueBaixo = produtos.filter(
+    (produto) => produto.estoque_atual <= produto.estoque_minimo,
+  );
   const checklistPendente = orders.filter((order) =>
     order.checklistInicial.some((item) => !item.status),
   );
@@ -191,10 +194,11 @@ function createMetrics(role: UserRole): MetricCard[] {
         tone: "emerald",
       },
       {
-        label: "Estoque baixo",
+        label: "ESTOQUE BAIXO",
         value: String(estoqueBaixo.length),
-        hint: "Itens com 1 unidade ou menos",
+        hint: `${estoqueBaixo.length} produtos abaixo do mínimo`,
         tone: "red",
+        path: "/estoque",
       },
     ];
   }
@@ -256,10 +260,11 @@ function createMetrics(role: UserRole): MetricCard[] {
       tone: "violet",
     },
     {
-      label: "Estoque baixo",
+      label: "ESTOQUE BAIXO",
       value: String(estoqueBaixo.length),
-      hint: "Itens com 1 unidade ou menos",
+      hint: `${estoqueBaixo.length} produtos abaixo do mínimo`,
       tone: "red",
+      path: "/estoque",
     },
     {
       label: "Clientes cadastrados",
@@ -272,6 +277,7 @@ function createMetrics(role: UserRole): MetricCard[] {
 
 export default function Dashboard({ role }: DashboardProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const locationState = location.state as DashboardLocationState | null;
   const metrics = createMetrics(role);
 
@@ -297,9 +303,10 @@ export default function Dashboard({ role }: DashboardProps) {
         {metrics.map((metric) => (
           <article
             key={metric.label}
+            onClick={() => metric.path && navigate(metric.path)}
             className={`rounded-2xl border p-5 shadow-sm shadow-slate-950/20 ${getCardClass(
               metric.tone,
-            )}`}
+            )} ${metric.path ? "cursor-pointer transition hover:-translate-y-0.5 hover:border-red-300/50" : ""}`}
           >
             <span className="text-xs font-semibold uppercase opacity-80">
               {metric.label}

@@ -45,7 +45,10 @@ import {
   getFornecedores,
   type Fornecedor,
 } from "../../services/fornecedoresService";
-import { registrarSaidaEstoque } from "../../services/estoqueService";
+import {
+  baixarProdutoPorOS,
+  reverterBaixaProdutoPorOS,
+} from "../../services/estoqueService";
 import ServiceOrderPhotosSection from "./ServiceOrderPhotosSection";
 
 type PartLine = {
@@ -343,18 +346,61 @@ function createPartLines(order?: ServiceOrder): PartLine[] {
   }));
 }
 
-function registerStockExitForOrder(order: ServiceOrder) {
-  if (order.status !== "FINALIZADA") {
-    return;
-  }
+function syncStockForOrderParts(
+  previousOrder: ServiceOrder | undefined,
+  currentOrder: ServiceOrder,
+) {
+  currentOrder.pecasNecessarias.forEach((part) => {
+    const previousPart = previousOrder?.pecasNecessarias.find(
+      (currentPart) => currentPart.id === part.id,
+    );
+    const quantityDelta = Number(part.quantidade || 0) - Number(previousPart?.quantidade || 0);
 
-  order.pecasNecessarias.forEach((part) => {
-    registrarSaidaEstoque({
+    if (quantityDelta > 0) {
+      baixarProdutoPorOS({
+        nome: part.peca,
+        quantidade: quantityDelta,
+        osCodigo: currentOrder.codigo,
+        observacao: `Peça adicionada à OS ${currentOrder.codigo}.`,
+        movimentacaoId: `os-saida-${currentOrder.codigo}-${part.id}-${Number(previousPart?.quantidade || 0)}-${part.quantidade}`,
+      });
+    }
+
+    if (quantityDelta < 0) {
+      reverterBaixaProdutoPorOS({
+        nome: part.peca,
+        quantidade: Math.abs(quantityDelta),
+        osCodigo: currentOrder.codigo,
+        observacao: `Peça removida da OS ${currentOrder.codigo}`,
+        movimentacaoId: `os-entrada-remocao-${currentOrder.codigo}-${part.id}-${Number(previousPart?.quantidade || 0)}-${part.quantidade}`,
+      });
+    }
+  });
+
+  previousOrder?.pecasNecessarias.forEach((part) => {
+    if (currentOrder.pecasNecessarias.some((currentPart) => currentPart.id === part.id)) {
+      return;
+    }
+
+    reverterBaixaProdutoPorOS({
       nome: part.peca,
       quantidade: part.quantidade,
-      osId: order.id,
-      compraId: part.compraId,
-      descricao: `Peça usada na OS ${order.id}.`,
+      osCodigo: currentOrder.codigo,
+      observacao: `Peça removida da OS ${currentOrder.codigo}`,
+      movimentacaoId: `os-entrada-removida-${currentOrder.codigo}-${part.id}`,
+    });
+  });
+}
+
+function revertStockForCanceledOrder(order: ServiceOrder) {
+  order.pecasNecessarias.forEach((part) => {
+    reverterBaixaProdutoPorOS({
+      nome: part.peca,
+      quantidade: part.quantidade,
+      osCodigo: order.codigo,
+      origem: "ajuste",
+      observacao: `OS cancelada: ${order.codigo}`,
+      movimentacaoId: `os-cancelada-${order.codigo}-${part.id}`,
     });
   });
 }
@@ -1116,7 +1162,9 @@ export default function OSDetail() {
           : updatedOrder;
 
         syncLoadedVersion(savedOrder);
-        registerStockExitForOrder(savedOrder);
+        if (nextStatus === "CANCELADA") {
+          revertStockForCanceledOrder(savedOrder);
+        }
         setOrder(savedOrder);
       } catch (error) {
         setSaveMessage(
@@ -1788,7 +1836,7 @@ export default function OSDetail() {
         storedOrder.codigo === order.codigo ? savedOrder : storedOrder,
       );
       saveStoredOrders(updatedOrders);
-      registerStockExitForOrder(savedOrder);
+      syncStockForOrderParts(order, savedOrder);
       const refetchedOrder = oficina_id
         ? await getServiceOrderSupabase(oficina_id, savedOrder.id)
         : undefined;

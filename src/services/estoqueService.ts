@@ -10,14 +10,26 @@ import {
 export type {
   EstoqueItem,
   EstoqueMovimentacao,
+  EstoqueMovimentacaoOrigem,
   EstoqueMovimentacaoTipo,
+  NotaFiscalImportada,
+  ProdutoEstoque,
 } from "../pages/estoque/estoqueStorage";
 
 export {
   addItemEstoque,
+  atualizarProdutoEstoque,
+  baixarProdutoPorOS,
+  criarProdutoEstoque,
   getEstoque,
+  getEstoqueMovimentacoes,
+  getNotasFiscaisImportadas,
+  getProdutosEstoque,
   registrarSaidaEstoque,
   removeItemEstoque,
+  registrarEntradaProduto,
+  reverterBaixaProdutoPorOS,
+  salvarNotaFiscalImportada,
   updateItemEstoque,
 } from "../pages/estoque/estoqueStorage";
 
