@@ -19,6 +19,7 @@ import Clientes from "./pages/clientes/Clientes";
 import ClienteDetail from "./pages/clientes/ClienteDetail";
 import Compras from "./pages/compras/Compras";
 import Configuracoes from "./pages/configuracoes/Configuracoes";
+import CotacaoPublica from "./pages/cotacao/CotacaoPublica";
 import Dashboard from "./pages/dashboard/Dashboard";
 import Estoque from "./pages/estoque/Estoque";
 import Financeiro from "./pages/financeiro/Financeiro";
@@ -44,13 +45,13 @@ type MenuItem = {
 const MENU_BY_ROLE: Record<UserRole, MenuItem[]> = {
   admin: [
     { label: "Dashboard", path: "/dashboard" },
-    { label: "Financeiro", path: "/financeiro" },
-    { label: "Clientes", path: "/clientes" },
     { label: "Ordens de Serviço", path: "/os" },
+    { label: "Clientes", path: "/clientes" },
     { label: "Compras", path: "/compras" },
     { label: "Fornecedores", path: "/fornecedores" },
     { label: "Estoque", path: "/estoque" },
     { label: "Hermes IA", path: "/sdr", icon: "hermes" },
+    { label: "Financeiro", path: "/financeiro" },
     { label: "Configurações", path: "/configuracoes" },
   ],
   mecanico: [
@@ -128,6 +129,7 @@ function AppContent() {
 
   const isPublicBudgetRoute =
     location.pathname.startsWith("/orcamento/") ||
+    location.pathname.startsWith("/cotacao/") ||
     location.pathname.startsWith("/fornecedor/cotacao/");
 
   async function handleSignOut() {
@@ -143,6 +145,7 @@ function AppContent() {
         <main className="px-4 py-6 sm:px-6 lg:px-8">
           <Routes>
             <Route path="/orcamento/:id" element={<OrcamentoView />} />
+            <Route path="/cotacao/:cotacaoId" element={<CotacaoPublica />} />
             <Route
               path="/fornecedor/cotacao/:id"
               element={<FornecedorCotacaoView />}
@@ -283,6 +286,10 @@ export default function App() {
                 </main>
               </div>
             }
+          />
+          <Route
+            path="/cotacao/:cotacaoId"
+            element={<CotacaoPublica />}
           />
           <Route
             path="/fornecedor/cotacao/:id"

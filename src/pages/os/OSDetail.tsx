@@ -6,6 +6,7 @@ import ReciboOS from "../../components/ReciboOS";
 import { useAuth } from "../../contexts/useAuth";
 import { supabase } from "../../lib/supabase";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
+import { getOficinaId } from "../../utils/getOficinaId";
 import {
   calculatePaymentSimulation,
   getConfiguracoesOficina,
@@ -132,6 +133,10 @@ type SupabaseOrderStatusRow = {
   status: string | null;
   status_orcamento?: string | null;
   updated_at: string | null;
+};
+
+type SupabaseCotacaoRow = {
+  id: string;
 };
 
 type ServicoCatalogo = {
@@ -748,6 +753,8 @@ export default function OSDetail() {
   const [saveMessage, setSaveMessage] = useState("");
   const [showBudgetActions, setShowBudgetActions] = useState(false);
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
+  const [publicQuoteLink, setPublicQuoteLink] = useState("");
+  const [isPublicQuoteLinkCopied, setIsPublicQuoteLinkCopied] = useState(false);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>(() =>
     getDefaultDetailTab(),
@@ -1596,6 +1603,8 @@ export default function OSDetail() {
 
   function openQuoteModalForItems(itemIds: string[]) {
     setSelectedQuoteItemIds(itemIds);
+    setPublicQuoteLink("");
+    setIsPublicQuoteLinkCopied(false);
     setIsQuoteModalOpen(true);
   }
 
@@ -1623,6 +1632,65 @@ export default function OSDetail() {
       syncLoadedVersion(updatedOrder);
     }
     navigate(`/compras?osId=${order.codigo}`);
+  }
+
+  async function createSupabasePublicQuote(
+    quoteItems: CotacaoPecaItem[],
+    fornecedor: Fornecedor,
+  ) {
+    if (!supabase || !order) {
+      return "";
+    }
+
+    const resolvedOficinaId = await getOficinaId();
+
+    if (!resolvedOficinaId) {
+      return "";
+    }
+
+    const { data: cotacao, error: cotacaoError } = await supabase
+      .from("cotacoes")
+      .insert({
+        oficina_id: resolvedOficinaId,
+        ordem_servico_id: order.id,
+        fornecedor_id: fornecedor.id,
+        status: "COTACAO_ENVIADA",
+      })
+      .select("id")
+      .single<SupabaseCotacaoRow>();
+
+    if (cotacaoError || !cotacao?.id) {
+      return "";
+    }
+
+    const { error: itemError } = await supabase.from("cotacao_itens").insert(
+      quoteItems.map((item) => ({
+        oficina_id: resolvedOficinaId,
+        cotacao_id: cotacao.id,
+        nome_peca: item.peca,
+        quantidade: item.quantidade,
+      })),
+    );
+
+    if (itemError) {
+      return "";
+    }
+
+    return `${window.location.origin}/cotacao/${cotacao.id}`;
+  }
+
+  async function handleCopyPublicQuoteLink() {
+    if (!publicQuoteLink) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(publicQuoteLink);
+      setIsPublicQuoteLinkCopied(true);
+      setSaveMessage("Link da cotação copiado.");
+    } catch {
+      setSaveMessage("Não foi possível copiar o link da cotação.");
+    }
   }
 
   async function handleSendQuote() {
@@ -1714,10 +1782,22 @@ export default function OSDetail() {
       );
       return;
     }
-    const responseLink = `${window.location.origin}/fornecedor/cotacao/${newCotacao.id}`;
+    const publicLink =
+      (await createSupabasePublicQuote(quoteItems, selectedFornecedor)) ||
+      `${window.location.origin}/fornecedor/cotacao/${newCotacao.id}`;
+    const vehicleSummary = [
+      vehicleInfo.marca,
+      vehicleInfo.modelo,
+      vehicleInfo.ano,
+      vehicleInfo.placa ? `placa ${vehicleInfo.placa}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     const whatsappUrlWithLink = createQuoteWhatsappUrl(
       selectedFornecedor,
-      `${message}\n\nResponda a cotação neste link: ${responseLink}`,
+      `Olá ${selectedFornecedor.nome}! Segue solicitação de cotação da ${
+        oficinaConfig.nomeOficina
+      } para o veículo ${vehicleSummary || "não informado"}.\nAcesse o link para ver as peças e enviar seus preços:\n${publicLink}`,
     );
 
     const updatedOrders = getStoredOrders().map((storedOrder) =>
@@ -1740,10 +1820,10 @@ export default function OSDetail() {
     }
 
     window.open(whatsappUrlWithLink || whatsappUrl, "_blank", "noopener,noreferrer");
+    setPublicQuoteLink(publicLink);
+    setIsPublicQuoteLinkCopied(false);
     setOsCotacoes((currentCotacoes) => [newCotacao, ...currentCotacoes]);
     setSaveMessage(`Cotação enviada para ${selectedFornecedor.nome}.`);
-    setIsQuoteModalOpen(false);
-    resetQuoteForm();
   }
 
   async function handleChooseQuoteSupplier(
@@ -3027,7 +3107,12 @@ export default function OSDetail() {
 
               <button
                 type="button"
-                onClick={() => setIsQuoteModalOpen(false)}
+                onClick={() => {
+                  setIsQuoteModalOpen(false);
+                  setPublicQuoteLink("");
+                  setIsPublicQuoteLinkCopied(false);
+                  resetQuoteForm();
+                }}
                 className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
               >
                 Fechar
@@ -3167,9 +3252,36 @@ export default function OSDetail() {
               </div>
 
               <div className="flex flex-wrap justify-end gap-3 border-t border-slate-800 pt-5">
+                {publicQuoteLink && (
+                  <div className="w-full rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm">
+                    <span className="text-xs font-semibold uppercase text-emerald-200">
+                      Link público da cotação
+                    </span>
+                    <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <input
+                        className="min-w-0 flex-1 rounded-lg border border-emerald-400/20 bg-slate-950 px-3 py-2 text-emerald-50 outline-none"
+                        value={publicQuoteLink}
+                        readOnly
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyPublicQuoteLink()}
+                        className="rounded-lg border border-emerald-300/40 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/10"
+                      >
+                        {isPublicQuoteLinkCopied ? "Link copiado" : "Copiar link"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <button
                   type="button"
-                  onClick={() => setIsQuoteModalOpen(false)}
+                  onClick={() => {
+                    setIsQuoteModalOpen(false);
+                    setPublicQuoteLink("");
+                    setIsPublicQuoteLinkCopied(false);
+                    resetQuoteForm();
+                  }}
                   className="rounded-xl border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-800"
                 >
                   Cancelar
