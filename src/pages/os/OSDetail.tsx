@@ -3,6 +3,7 @@ import { FileText } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
 import ReciboOS from "../../components/ReciboOS";
+import { useToast } from "../../components/Toast";
 import { useAuth } from "../../contexts/useAuth";
 import { supabase } from "../../lib/supabase";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
@@ -68,6 +69,16 @@ type PartLine = {
   markedUnitValue?: number;
   generatedFromChecklist?: string;
 };
+
+type OsDetailAction =
+  | "solicitarCotacao"
+  | "enviarOrcamento"
+  | "gerarOrcamento"
+  | "salvarAlteracoes"
+  | "aguardandoPeca"
+  | "cancelarOs"
+  | "confirmarAprovacao"
+  | "confirmarEntrada";
 
 function getBudgetEditSnapshot(
   parts: PartLine[],
@@ -473,6 +484,8 @@ function syncStockForOrderParts(
   previousOrder: ServiceOrder | undefined,
   currentOrder: ServiceOrder,
 ) {
+  let stockExitProcessed = false;
+
   currentOrder.pecasNecessarias.forEach((part) => {
     const previousPart = previousOrder?.pecasNecessarias.find(
       (currentPart) => currentPart.id === part.id,
@@ -483,6 +496,10 @@ function syncStockForOrderParts(
       : Number(previousPart?.quantidade || 0);
     const quantityDelta = currentQuantity - previousQuantity;
 
+    if (!previousPart && part.baixaProcessada) {
+      return;
+    }
+
     if (quantityDelta > 0) {
       baixarProdutoPorOS({
         nome: part.peca,
@@ -491,6 +508,8 @@ function syncStockForOrderParts(
         observacao: `Peça adicionada à OS ${currentOrder.codigo}.`,
         movimentacaoId: `os-saida-${currentOrder.codigo}-${part.id}-${Number(previousPart?.quantidade || 0)}-${part.quantidade}`,
       });
+      part.baixaProcessada = true;
+      stockExitProcessed = true;
     }
 
     if (quantityDelta < 0) {
@@ -520,6 +539,8 @@ function syncStockForOrderParts(
       movimentacaoId: `os-entrada-removida-${currentOrder.codigo}-${part.id}`,
     });
   });
+
+  return stockExitProcessed;
 }
 
 function revertStockForCanceledOrder(order: ServiceOrder) {
@@ -621,6 +642,7 @@ function getVehicleField(
 export default function OSDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const toast = useToast();
   const { oficina_id } = useAuth();
   const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
@@ -755,6 +777,9 @@ export default function OSDetail() {
     order?.valorEntradaPago || 0,
   );
   const [saveMessage, setSaveMessage] = useState("");
+  const [actionInProgress, setActionInProgress] =
+    useState<OsDetailAction | null>(null);
+  const [confirmingPurchaseKey, setConfirmingPurchaseKey] = useState("");
   const [showBudgetActions, setShowBudgetActions] = useState(false);
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
   const [publicQuoteLink, setPublicQuoteLink] = useState("");
@@ -1403,9 +1428,27 @@ export default function OSDetail() {
     descricao: string,
     tipo = "acao_manual",
   ) {
+    const actionKey =
+      nextStatus === "AGUARDANDO_PECA"
+        ? "aguardandoPeca"
+        : nextStatus === "CANCELADA"
+          ? "cancelarOs"
+          : null;
+
+    if (actionKey && actionInProgress) {
+      return;
+    }
+
+    if (actionKey) {
+      setActionInProgress(actionKey);
+    }
+
     setStatus(nextStatus);
 
     if (!order) {
+      if (actionKey) {
+        setActionInProgress(null);
+      }
       return;
     }
 
@@ -1413,26 +1456,30 @@ export default function OSDetail() {
       setSaveMessage(
         "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
       );
+      toast.error("Esta OS foi alterada em outro lugar. Recarregue antes de salvar.");
+      if (actionKey) {
+        setActionInProgress(null);
+      }
       return;
     }
 
-    const updatedOrders = getStoredOrders().map((storedOrder) =>
-      storedOrder.id === order.id
-        ? updateServiceOrderStatusWithTimeline(storedOrder, nextStatus, {
-            tipo,
-            titulo,
-            descricao,
-            usuarioResponsavel: "Oficina",
-          })
-        : storedOrder,
-    );
-    saveStoredOrders(updatedOrders);
-    const updatedOrder = updatedOrders.find(
-      (storedOrder) => storedOrder.id === order.id,
-    );
+    try {
+      const updatedOrders = getStoredOrders().map((storedOrder) =>
+        storedOrder.id === order.id
+          ? updateServiceOrderStatusWithTimeline(storedOrder, nextStatus, {
+              tipo,
+              titulo,
+              descricao,
+              usuarioResponsavel: "Oficina",
+            })
+          : storedOrder,
+      );
+      saveStoredOrders(updatedOrders);
+      const updatedOrder = updatedOrders.find(
+        (storedOrder) => storedOrder.id === order.id,
+      );
 
-    if (updatedOrder) {
-      try {
+      if (updatedOrder) {
         const savedOrder = oficina_id
           ? await updateServiceOrderSupabase(oficina_id, updatedOrder)
           : updatedOrder;
@@ -1442,28 +1489,40 @@ export default function OSDetail() {
           revertStockForCanceledOrder(savedOrder);
         }
         setOrder(savedOrder);
-      } catch (error) {
-        setSaveMessage(
-          error instanceof Error
-            ? error.message
-            : "Não foi possível atualizar a OS.",
-        );
-        return;
+      }
+
+      setSaveMessage(descricao || titulo);
+      toast.success(descricao || titulo);
+    }
+    catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Não foi possível atualizar a OS.";
+      setSaveMessage(errorMessage);
+      toast.error(`Erro ao atualizar OS: ${errorMessage}`);
+    } finally {
+      if (actionKey) {
+        setActionInProgress(null);
       }
     }
-
-    setSaveMessage(descricao || titulo);
   }
 
   function handleConfirmClientApproval() {
+    if (actionInProgress) {
+      return;
+    }
+
     if (!order || !isPreApproved) {
       return;
     }
+
+    setActionInProgress("confirmarAprovacao");
 
     if (hasConcurrentOrderChange()) {
       setSaveMessage(
         "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
       );
+      toast.error("Esta OS foi alterada em outro lugar. Recarregue antes de salvar.");
+      setActionInProgress(null);
       return;
     }
 
@@ -1539,12 +1598,20 @@ export default function OSDetail() {
     setOfficeConfirmedApproval(true);
     setClientDecision((currentDecision) => currentDecision || approvalStatus);
     setSaveMessage("Aprovação confirmada pela oficina.");
+    toast.success("Aprovação confirmada pela oficina.");
+    setActionInProgress(null);
   }
 
   function handleConfirmDepositPayment() {
+    if (actionInProgress) {
+      return;
+    }
+
     if (!order || !requiresDeposit) {
       return;
     }
+
+    setActionInProgress("confirmarEntrada");
 
     const dataPagamentoEntrada = new Date().toISOString();
     const updatedOrders = getStoredOrders().map((storedOrder) =>
@@ -1585,6 +1652,8 @@ export default function OSDetail() {
     setDepositPaidValue(depositSummary.entradaCalculada);
     setStatus("APROVADA");
     setSaveMessage("Recebimento da entrada confirmado.");
+    toast.success("Recebimento da entrada confirmado.");
+    setActionInProgress(null);
   }
 
   async function handleCopyBudgetLink() {
@@ -1606,15 +1675,41 @@ export default function OSDetail() {
     }
   }
 
-  function handleOpenBudgetWhatsapp() {
-    if (!budgetWhatsappUrl) {
-      setSaveMessage("Informe o telefone do cliente para abrir o WhatsApp.");
+  async function handleSendBudget() {
+    if (actionInProgress) {
       return;
     }
 
-    window.open(budgetWhatsappUrl, "_blank", "noopener,noreferrer");
-    registerBudgetSent("Orçamento enviado ao cliente pelo WhatsApp.");
-    setSaveMessage("WhatsApp aberto com a mensagem do orçamento.");
+    setActionInProgress("enviarOrcamento");
+
+    try {
+      if (!order) {
+        throw new Error("OS não encontrada.");
+      }
+
+      if (!budgetWhatsappUrl) {
+        throw new Error("Informe o telefone do cliente para abrir o WhatsApp.");
+      }
+
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(budgetLink);
+      }
+
+      window.open(budgetWhatsappUrl, "_blank", "noopener,noreferrer");
+      registerBudgetSent("Orçamento enviado ao cliente pelo WhatsApp.");
+      setShowBudgetActions(true);
+      setSaveMessage("Orçamento enviado! Link copiado para o WhatsApp.");
+      toast.success("Orçamento enviado! Link copiado para o WhatsApp.");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível enviar o orçamento.";
+      setSaveMessage(errorMessage);
+      toast.error(`Erro ao enviar orçamento: ${errorMessage}`);
+    } finally {
+      setActionInProgress(null);
+    }
   }
 
   function handleSendReceiptWhatsapp() {
@@ -1707,6 +1802,10 @@ export default function OSDetail() {
   }
 
   function openQuoteModalForItems(itemIds: string[]) {
+    if (actionInProgress) {
+      return;
+    }
+
     setSelectedQuoteItemIds(itemIds);
     setPublicQuoteLink("");
     setIsPublicQuoteLinkCopied(false);
@@ -1714,7 +1813,14 @@ export default function OSDetail() {
   }
 
   function handleOpenQuoteModal() {
+    if (actionInProgress) {
+      return;
+    }
+
+    setActionInProgress("solicitarCotacao");
+
     if (!order) {
+      setActionInProgress(null);
       return;
     }
 
@@ -1736,6 +1842,7 @@ export default function OSDetail() {
     if (updatedOrder) {
       syncLoadedVersion(updatedOrder);
     }
+    toast.success("Solicitação de cotação iniciada.");
     navigate(`/compras?osId=${order.codigo}`);
   }
 
@@ -1937,8 +2044,17 @@ export default function OSDetail() {
     response: CotacaoFornecedorResponse,
     itemResponse: CotacaoPecaRespostaItem,
   ) {
+    const purchaseKey = `${cotacao.id}-${cotacaoPart.id}-${response.fornecedorId}`;
+
+    if (confirmingPurchaseKey) {
+      return;
+    }
+
+    setConfirmingPurchaseKey(purchaseKey);
+
     if (getChoiceForPart(cotacao, cotacaoPart.id)) {
       setSaveMessage("Esta peça já tem fornecedor escolhido.");
+      setConfirmingPurchaseKey("");
       return;
     }
 
@@ -2065,17 +2181,28 @@ export default function OSDetail() {
       }
 
       setSaveMessage("Compra confirmada e peça atualizada na OS.");
+      toast.success("Compra confirmada e peça atualizada na OS.");
     } catch (error) {
-      setSaveMessage(
+      const errorMessage =
         error instanceof Error
           ? error.message
-          : "Não foi possível selecionar o fornecedor.",
-      );
+          : "Não foi possível selecionar o fornecedor.";
+      setSaveMessage(errorMessage);
+      toast.error(`Erro ao confirmar compra: ${errorMessage}`);
+    } finally {
+      setConfirmingPurchaseKey("");
     }
   }
 
   async function handleSaveChanges() {
+    if (actionInProgress) {
+      return;
+    }
+
+    setActionInProgress("salvarAlteracoes");
+
     if (!order) {
+      setActionInProgress(null);
       return;
     }
 
@@ -2083,6 +2210,8 @@ export default function OSDetail() {
       setSaveMessage(
         "Esta OS foi alterada em outro lugar. Recarregue antes de salvar.",
       );
+      toast.error("Esta OS foi alterada em outro lugar. Recarregue antes de salvar.");
+      setActionInProgress(null);
       return;
     }
 
@@ -2090,6 +2219,8 @@ export default function OSDetail() {
       setSaveMessage(
         "Orçamento já enviado/aprovado. Para alterar valores, crie uma revisão.",
       );
+      toast.error("Orçamento já enviado/aprovado. Para alterar valores, crie uma revisão.");
+      setActionInProgress(null);
       return;
     }
 
@@ -2099,11 +2230,15 @@ export default function OSDetail() {
 
     if (!clientName.trim()) {
       setSaveMessage("Informe o cliente antes de salvar a OS.");
+      toast.error("Erro ao salvar alterações: informe o cliente.");
+      setActionInProgress(null);
       return;
     }
 
     if (!vehicleDescription || !vehiclePlate.trim()) {
       setSaveMessage("Informe o veículo e a placa antes de salvar a OS.");
+      toast.error("Erro ao salvar alterações: informe o veículo e a placa.");
+      setActionInProgress(null);
       return;
     }
     const checklistInicial = checklistItems.map((item) => ({
@@ -2255,30 +2390,51 @@ export default function OSDetail() {
         storedOrder.codigo === order.codigo ? savedOrder : storedOrder,
       );
       saveStoredOrders(updatedOrders);
-      syncStockForOrderParts(order, savedOrder);
+      const stockExitProcessed = syncStockForOrderParts(order, savedOrder);
+      saveStoredOrders(
+        updatedOrders.map((storedOrder) =>
+          storedOrder.codigo === order.codigo ? savedOrder : storedOrder,
+        ),
+      );
       const refetchedOrder = oficina_id
         ? await getServiceOrderSupabase(oficina_id, savedOrder.id)
         : undefined;
       const completeOrder = refetchedOrder ?? savedOrder;
       syncLoadedVersion(completeOrder);
       setOrder(completeOrder);
-      setSaveMessage("Alterações salvas.");
+      const successMessage = stockExitProcessed
+        ? "Peça adicionada à OS"
+        : "Alterações salvas.";
+      setSaveMessage(successMessage);
+      toast.success(successMessage);
     } catch (error) {
-      setSaveMessage(
+      const errorMessage =
         error instanceof Error
           ? error.message
-          : "Não foi possível salvar as alterações.",
-      );
+          : "Não foi possível salvar as alterações.";
+      setSaveMessage(errorMessage);
+      toast.error(`Erro ao salvar alterações: ${errorMessage}`);
+    } finally {
+      setActionInProgress(null);
     }
   }
 
   async function handleGenerateBudget() {
+    if (actionInProgress) {
+      return;
+    }
+
+    setActionInProgress("gerarOrcamento");
+
     if (!order) {
+      setActionInProgress(null);
       return;
     }
 
     if (!oficina_id) {
       setSaveMessage("Não foi possível identificar a oficina do usuário logado.");
+      toast.error("Erro ao gerar orçamento: não foi possível identificar a oficina.");
+      setActionInProgress(null);
       return;
     }
 
@@ -2317,12 +2473,16 @@ export default function OSDetail() {
 
       setOrder(orderWithBudget);
       setSaveMessage("Orçamento gerado como rascunho.");
+      toast.success("Orçamento gerado como rascunho.");
     } catch (error) {
-      setSaveMessage(
+      const errorMessage =
         error instanceof Error
           ? error.message
-          : "Não foi possível gerar o orçamento.",
-      );
+          : "Não foi possível gerar o orçamento.";
+      setSaveMessage(errorMessage);
+      toast.error(`Erro ao gerar orçamento: ${errorMessage}`);
+    } finally {
+      setActionInProgress(null);
     }
   }
 
@@ -2369,6 +2529,7 @@ export default function OSDetail() {
 
   return (
     <div className="max-w-6xl">
+      <toast.ToastContainer />
       <div className="mb-6">
         <BackButton className="mb-4" />
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -2384,18 +2545,20 @@ export default function OSDetail() {
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
-            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400"
+            onClick={handleSendBudget}
+            disabled={actionInProgress === "enviarOrcamento"}
+            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Enviar orçamento
+            {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Enviar orçamento"}
           </button>
 
           <button
             type="button"
             onClick={handleOpenQuoteModal}
-            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-amber-400"
+            disabled={actionInProgress === "solicitarCotacao"}
+            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Solicitar cotação
+            {actionInProgress === "solicitarCotacao" ? "Solicitando..." : "Solicitar cotação"}
           </button>
         </div>
       </div>
@@ -2462,17 +2625,19 @@ export default function OSDetail() {
           <button
             type="button"
             onClick={handleOpenQuoteModal}
-            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400"
+            disabled={actionInProgress === "solicitarCotacao"}
+            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Solicitar cotação
+            {actionInProgress === "solicitarCotacao" ? "Solicitando..." : "Solicitar cotação"}
           </button>
 
           <button
             type="button"
-            onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
-            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
+            onClick={handleSendBudget}
+            disabled={actionInProgress === "enviarOrcamento"}
+            className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Enviar orçamento
+            {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Enviar orçamento"}
           </button>
 
           {status === "APROVADA" && (
@@ -2502,9 +2667,12 @@ export default function OSDetail() {
                 "aguardando_peca",
               )
             }
-            className="rounded-lg border border-orange-400/40 px-4 py-2 text-sm font-semibold text-orange-200 hover:bg-orange-500/10"
+            disabled={actionInProgress === "aguardandoPeca"}
+            className="rounded-lg border border-orange-400/40 px-4 py-2 text-sm font-semibold text-orange-200 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Marcar aguardando peça
+            {actionInProgress === "aguardandoPeca"
+              ? "Marcando..."
+              : "Marcar aguardando peça"}
           </button>
 
           {status === "EM_EXECUCAO" && (
@@ -2563,9 +2731,10 @@ export default function OSDetail() {
                   "cancelamento",
                 )
               }
-              className="rounded-lg border border-red-400/40 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/10"
+              disabled={actionInProgress === "cancelarOs"}
+              className="rounded-lg border border-red-400/40 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Cancelar OS
+              {actionInProgress === "cancelarOs" ? "Cancelando..." : "Cancelar OS"}
             </button>
           )}
         </div>
@@ -2610,10 +2779,11 @@ export default function OSDetail() {
 
                 <button
                   type="button"
-                  onClick={handleOpenBudgetWhatsapp}
-                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400"
+                  onClick={handleSendBudget}
+                  disabled={actionInProgress === "enviarOrcamento"}
+                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Abrir WhatsApp
+                  {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Abrir WhatsApp"}
                 </button>
               </div>
             </div>
@@ -2680,9 +2850,12 @@ export default function OSDetail() {
               <button
                 type="button"
                 onClick={handleConfirmClientApproval}
-                className="mt-4 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
+                disabled={actionInProgress === "confirmarAprovacao"}
+                className="mt-4 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Confirmar aprovação com cliente
+                {actionInProgress === "confirmarAprovacao"
+                  ? "Confirmando..."
+                  : "Confirmar aprovação com cliente"}
               </button>
             </div>
           )}
@@ -2718,9 +2891,12 @@ export default function OSDetail() {
                   <button
                     type="button"
                     onClick={handleConfirmDepositPayment}
-                    className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400"
+                    disabled={actionInProgress === "confirmarEntrada"}
+                    className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Confirmar recebimento da entrada
+                    {actionInProgress === "confirmarEntrada"
+                      ? "Confirmando..."
+                      : "Confirmar recebimento da entrada"}
                   </button>
                 )}
             </div>
@@ -2915,8 +3091,8 @@ export default function OSDetail() {
             onClick={() =>
               openQuoteModalForItems(quoteItemsWithoutCotacao.map((part) => part.id))
             }
-            disabled={!quoteItemsWithoutCotacao.length}
-            className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-400"
+            disabled={!quoteItemsWithoutCotacao.length || Boolean(actionInProgress)}
+            className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Solicitar cotação de todas
           </button>
@@ -2953,7 +3129,8 @@ export default function OSDetail() {
                     <button
                       type="button"
                       onClick={() => openQuoteModalForItems([part.id])}
-                      className="rounded-lg border border-amber-400/40 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/10"
+                      disabled={Boolean(actionInProgress)}
+                      className="rounded-lg border border-amber-400/40 px-3 py-2 text-xs font-semibold text-amber-100 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Solicitar cotação
                     </button>
@@ -3086,6 +3263,9 @@ export default function OSDetail() {
                               {partOptions.length ? (
                                 <div className="mt-4 grid gap-3">
                                   {partOptions.map(({ response, itemResponse }) => {
+                                    const purchaseKey = `${cotacao.id}-${cotacaoPart.id}-${response.fornecedorId}`;
+                                    const isConfirmingPurchase =
+                                      confirmingPurchaseKey === purchaseKey;
                                     const isSelected =
                                       selectedChoice?.fornecedorId ===
                                       response.fornecedorId;
@@ -3160,12 +3340,17 @@ export default function OSDetail() {
                                               itemResponse,
                                             )
                                           }
-                                          disabled={Boolean(selectedChoice)}
+                                          disabled={
+                                            Boolean(selectedChoice) ||
+                                            Boolean(confirmingPurchaseKey)
+                                          }
                                           className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
-                                          {isSelected
-                                            ? "Compra confirmada"
-                                            : "Confirmar esta compra"}
+                                          {isConfirmingPurchase
+                                            ? "Confirmando..."
+                                            : isSelected
+                                              ? "Compra confirmada"
+                                              : "Confirmar esta compra"}
                                         </button>
                                       </div>
                                     );
@@ -4193,19 +4378,21 @@ export default function OSDetail() {
             <button
               type="button"
               onClick={handleOpenQuoteModal}
-              className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-400"
+              disabled={actionInProgress === "solicitarCotacao"}
+              className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Solicitar cotação
+              {actionInProgress === "solicitarCotacao" ? "Solicitando..." : "Solicitar cotação"}
             </button>
           )}
 
           {activeTab === "orcamento" && (
             <button
               type="button"
-              onClick={() => setShowBudgetActions((currentValue) => !currentValue)}
-              className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+              onClick={handleSendBudget}
+              disabled={actionInProgress === "enviarOrcamento"}
+              className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Enviar orçamento
+              {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Enviar orçamento"}
             </button>
           )}
 
@@ -4213,17 +4400,21 @@ export default function OSDetail() {
             <button
               type="button"
               onClick={handleGenerateBudget}
-              className="rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-400"
+              disabled={actionInProgress === "gerarOrcamento"}
+              className="rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Gerar orçamento
+              {actionInProgress === "gerarOrcamento" ? "Gerando..." : "Gerar orçamento"}
             </button>
           )}
 
           <button
             type="submit"
-            className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400"
+            disabled={actionInProgress === "salvarAlteracoes"}
+            className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Salvar alterações
+            {actionInProgress === "salvarAlteracoes"
+              ? "Salvando..."
+              : "Salvar alterações"}
           </button>
         </div>
       </form>

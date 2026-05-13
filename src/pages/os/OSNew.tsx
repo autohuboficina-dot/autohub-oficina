@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useToast } from "../../components/Toast";
 import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import {
@@ -64,7 +65,7 @@ function toNumber(value: string) {
 
 function registerInitialStockExit(order: ServiceOrder) {
   order.pecasNecessarias.forEach((part) => {
-    if (part.peca_cliente) {
+    if (part.peca_cliente || part.baixaProcessada) {
       return;
     }
 
@@ -75,6 +76,7 @@ function registerInitialStockExit(order: ServiceOrder) {
       observacao: `Peça adicionada à OS ${order.codigo}.`,
       movimentacaoId: `os-saida-${order.codigo}-${part.id}-0-${part.quantidade}`,
     });
+    part.baixaProcessada = true;
   });
 }
 
@@ -86,6 +88,7 @@ function getSingleVehicleId(clientes: Cliente[], clienteId: string) {
 
 export default function OSNew() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const clienteIdParam = searchParams.get("clienteId") || "";
   const { oficina_id } = useAuth();
@@ -127,6 +130,7 @@ export default function OSNew() {
   const [savedBudgetToken, setSavedBudgetToken] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [formError, setFormError] = useState("");
+  const [salvando, setSalvando] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -352,6 +356,10 @@ export default function OSNew() {
   }
 
   async function handleSaveOrder() {
+    if (salvando) {
+      return;
+    }
+
     setFormError("");
 
     if (!oficina_id) {
@@ -369,167 +377,174 @@ export default function OSNew() {
       return;
     }
 
-    const currentOrders = await getStoredOrdersSupabase(oficina_id);
-    const nextOrderCode = createNextOrderCode(currentOrders);
-    const now = new Date().toISOString();
-    const vehicleDescription = [
-      selectedVehicle?.marca,
-      selectedVehicle?.modelo,
-      selectedVehicle?.ano,
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const checklistInicial = checklistItems.map((item) => ({
-      item,
-      status: checklistState[item]?.status ?? "",
-      observacaoTecnica: checklistState[item]?.observacaoTecnica.trim() ?? "",
-    }));
-    const pecasNecessarias = partLines.map((line) => {
-      const quantidade = toNumber(line.quantity);
-      const valorUnitario = toNumber(line.unitValue);
-
-      return {
-        id: line.id,
-        peca: line.name.trim(),
-        quantidade,
-        valorUnitario,
-        valorTotal: quantidade * valorUnitario,
-        origemChecklist: line.generatedFromChecklist,
-      };
-    });
-    const servicosMaoDeObra = laborLines.map((line) => ({
-      id: line.id,
-      servico: line.service.trim(),
-      descricao: line.description.trim(),
-      valor: toNumber(line.value),
-    }));
-    const clienteTelefone = onlyDigits(selectedCliente?.telefone || "");
-    const clienteDocumento = onlyDigits(selectedCliente?.documento || "");
-    const newOrder: ServiceOrder = {
-      id: createServiceOrderId(),
-      codigo: nextOrderCode,
-      criadoEm: now,
-      updatedAt: now,
-      version: 1,
-      cliente: selectedCliente.nome,
-      telefone: clienteTelefone,
-      veiculo: vehicleDescription,
-      placa: selectedVehicle.placa,
-      servicoInicial: problemReport.trim(),
-      observacao: [defectFound, probableCause, recommendedSolution]
-        .filter(Boolean)
-        .join(" | "),
-      status: "ABERTA",
-      timeline: [
-        createServiceOrderTimelineEvent({
-          tipo: "criacao",
-          titulo: "OS criada",
-          descricao: `Ordem de serviço ${nextOrderCode} criada.`,
-          usuarioResponsavel: "Atendimento",
-          statusAnterior: "",
-          statusNovo: "ABERTA",
-        }),
-      ],
-      statusAprovacao: "pendente",
-      itensAprovados: [],
-      dataDecisaoAprovacao: "",
-      dataPreAprovacao: "",
-      dataConfirmacaoOficina: "",
-      confirmacaoOficina: false,
-      decisaoCliente: "",
-      observacaoAprovacao: "",
-      exigeEntrada: requiresDeposit,
-      tipoEntrada: depositType,
-      valorEntrada: toNumber(depositValue),
-      percentualEntrada: toNumber(depositPercent),
-      entradaCalculada: depositSummary.entradaCalculada,
-      saldoRestante: depositSummary.saldoRestante,
-      statusEntrada: requiresDeposit ? "pendente" : "nao_exige",
-      dataPagamentoEntrada: "",
-      valorEntradaPago: 0,
-      formaPagamentoEscolhida: "",
-      parcelasEscolhidas: 1,
-      valorFinalPagamento: 0,
-      descontoAplicado: 0,
-      taxaAplicada: 0,
-      descontoPagamentoAplicado: 0,
-      taxaPagamentoAplicada: 0,
-      clienteId: selectedCliente.id,
-      clienteNome: selectedCliente.nome,
-      clienteTelefone,
-      veiculoId: selectedVehicle.id,
-      km_entrada: "",
-      proxima_revisao_km: "",
-      proxima_revisao_data: "",
-      veiculoTipo: selectedVehicle.tipo_veiculo || "Carro",
-      veiculoMarca: selectedVehicle.marca,
-      veiculoModelo: selectedVehicle.modelo,
-      veiculoAno: selectedVehicle.ano,
-      veiculoMotor: selectedVehicle.motor,
-      veiculoCombustivel: selectedVehicle.combustivel,
-      veiculoPlaca: selectedVehicle.placa,
-      veiculoChassi: selectedVehicle.chassiVin,
-      clienteDados: {
-        nome: selectedCliente.nome,
-        telefone: clienteTelefone,
-        cpf: clienteDocumento.length <= 11 ? clienteDocumento : "",
-        cnpj: clienteDocumento.length > 11 ? clienteDocumento : "",
-        email: selectedCliente.email,
-      },
-      veiculoDados: {
-        tipo_veiculo: selectedVehicle.tipo_veiculo || "Carro",
-        marca: selectedVehicle.marca,
-        modelo: selectedVehicle.modelo,
-        ano: selectedVehicle.ano,
-        placa: selectedVehicle.placa,
-        motor: selectedVehicle.motor,
-        combustivel: selectedVehicle.combustivel,
-        chassiVin: selectedVehicle.chassiVin,
-        kmAtual: "",
-      },
-      problemaRelatado: problemReport.trim(),
-      diagnostico: {
-        defeitoEncontrado: defectFound.trim(),
-        causaProvavel: probableCause.trim(),
-        solucaoRecomendada: recommendedSolution.trim(),
-      },
-      observacoes_tecnicas: "",
-      checklistInicial,
-      pecasNecessarias,
-      servicosMaoDeObra,
-      fotosOs: photos,
-      orcamento: {
-        totalPecas: totals.partsTotal,
-        totalMaoDeObra: totals.laborTotal,
-        descontoValor: toNumber(discountValue),
-        descontoTipo: discountType,
-        descontoAplicado: totals.discountAmount,
-        formaPagamento: paymentMethod,
-        totalFinal: totals.finalTotal,
-      },
-    };
-
+    setSalvando(true);
     try {
+      const currentOrders = await getStoredOrdersSupabase(oficina_id);
+      const nextOrderCode = createNextOrderCode(currentOrders);
+      const now = new Date().toISOString();
+      const vehicleDescription = [
+        selectedVehicle?.marca,
+        selectedVehicle?.modelo,
+        selectedVehicle?.ano,
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const checklistInicial = checklistItems.map((item) => ({
+        item,
+        status: checklistState[item]?.status ?? "",
+        observacaoTecnica: checklistState[item]?.observacaoTecnica.trim() ?? "",
+      }));
+      const pecasNecessarias = partLines.map((line) => {
+        const quantidade = toNumber(line.quantity);
+        const valorUnitario = toNumber(line.unitValue);
+
+        return {
+          id: line.id,
+          peca: line.name.trim(),
+          quantidade,
+          valorUnitario,
+          valorTotal: quantidade * valorUnitario,
+          origemChecklist: line.generatedFromChecklist,
+        };
+      });
+      const servicosMaoDeObra = laborLines.map((line) => ({
+        id: line.id,
+        servico: line.service.trim(),
+        descricao: line.description.trim(),
+        valor: toNumber(line.value),
+      }));
+      const clienteTelefone = onlyDigits(selectedCliente?.telefone || "");
+      const clienteDocumento = onlyDigits(selectedCliente?.documento || "");
+      const newOrder: ServiceOrder = {
+        id: createServiceOrderId(),
+        codigo: nextOrderCode,
+        criadoEm: now,
+        updatedAt: now,
+        version: 1,
+        cliente: selectedCliente.nome,
+        telefone: clienteTelefone,
+        veiculo: vehicleDescription,
+        placa: selectedVehicle.placa,
+        servicoInicial: problemReport.trim(),
+        observacao: [defectFound, probableCause, recommendedSolution]
+          .filter(Boolean)
+          .join(" | "),
+        status: "ABERTA",
+        timeline: [
+          createServiceOrderTimelineEvent({
+            tipo: "criacao",
+            titulo: "OS criada",
+            descricao: `Ordem de serviço ${nextOrderCode} criada.`,
+            usuarioResponsavel: "Atendimento",
+            statusAnterior: "",
+            statusNovo: "ABERTA",
+          }),
+        ],
+        statusAprovacao: "pendente",
+        itensAprovados: [],
+        dataDecisaoAprovacao: "",
+        dataPreAprovacao: "",
+        dataConfirmacaoOficina: "",
+        confirmacaoOficina: false,
+        decisaoCliente: "",
+        observacaoAprovacao: "",
+        exigeEntrada: requiresDeposit,
+        tipoEntrada: depositType,
+        valorEntrada: toNumber(depositValue),
+        percentualEntrada: toNumber(depositPercent),
+        entradaCalculada: depositSummary.entradaCalculada,
+        saldoRestante: depositSummary.saldoRestante,
+        statusEntrada: requiresDeposit ? "pendente" : "nao_exige",
+        dataPagamentoEntrada: "",
+        valorEntradaPago: 0,
+        formaPagamentoEscolhida: "",
+        parcelasEscolhidas: 1,
+        valorFinalPagamento: 0,
+        descontoAplicado: 0,
+        taxaAplicada: 0,
+        descontoPagamentoAplicado: 0,
+        taxaPagamentoAplicada: 0,
+        clienteId: selectedCliente.id,
+        clienteNome: selectedCliente.nome,
+        clienteTelefone,
+        veiculoId: selectedVehicle.id,
+        km_entrada: "",
+        proxima_revisao_km: "",
+        proxima_revisao_data: "",
+        veiculoTipo: selectedVehicle.tipo_veiculo || "Carro",
+        veiculoMarca: selectedVehicle.marca,
+        veiculoModelo: selectedVehicle.modelo,
+        veiculoAno: selectedVehicle.ano,
+        veiculoMotor: selectedVehicle.motor,
+        veiculoCombustivel: selectedVehicle.combustivel,
+        veiculoPlaca: selectedVehicle.placa,
+        veiculoChassi: selectedVehicle.chassiVin,
+        clienteDados: {
+          nome: selectedCliente.nome,
+          telefone: clienteTelefone,
+          cpf: clienteDocumento.length <= 11 ? clienteDocumento : "",
+          cnpj: clienteDocumento.length > 11 ? clienteDocumento : "",
+          email: selectedCliente.email,
+        },
+        veiculoDados: {
+          tipo_veiculo: selectedVehicle.tipo_veiculo || "Carro",
+          marca: selectedVehicle.marca,
+          modelo: selectedVehicle.modelo,
+          ano: selectedVehicle.ano,
+          placa: selectedVehicle.placa,
+          motor: selectedVehicle.motor,
+          combustivel: selectedVehicle.combustivel,
+          chassiVin: selectedVehicle.chassiVin,
+          kmAtual: "",
+        },
+        problemaRelatado: problemReport.trim(),
+        diagnostico: {
+          defeitoEncontrado: defectFound.trim(),
+          causaProvavel: probableCause.trim(),
+          solucaoRecomendada: recommendedSolution.trim(),
+        },
+        observacoes_tecnicas: "",
+        checklistInicial,
+        pecasNecessarias,
+        servicosMaoDeObra,
+        fotosOs: photos,
+        orcamento: {
+          totalPecas: totals.partsTotal,
+          totalMaoDeObra: totals.laborTotal,
+          descontoValor: toNumber(discountValue),
+          descontoTipo: discountType,
+          descontoAplicado: totals.discountAmount,
+          formaPagamento: paymentMethod,
+          totalFinal: totals.finalTotal,
+        },
+      };
       const savedOrder = await createServiceOrderSupabase(oficina_id, newOrder);
+      registerInitialStockExit(savedOrder);
       saveStoredOrders([
         ...getStoredOrders().filter((order) => order.id !== savedOrder.id),
         savedOrder,
       ]);
-      registerInitialStockExit(savedOrder);
       setSavedOrderId(savedOrder.codigo);
       setSavedBudgetToken(savedOrder.orcamento.publicToken || "");
       setSaveMessage(`OS ${savedOrder.codigo} salva com sucesso.`);
+      toast.success(`OS ${savedOrder.codigo} criada com sucesso!`);
+      await new Promise((resolve) => window.setTimeout(resolve, 800));
+      navigate(`/os/${savedOrder.codigo}`);
     } catch (error) {
-      setFormError(
+      const errorMessage =
         error instanceof Error
           ? error.message
-          : "Não foi possível salvar a OS.",
-      );
+          : "Não foi possível salvar a OS.";
+      setFormError(errorMessage);
+      toast.error(`Erro ao criar OS: ${errorMessage}`);
+    } finally {
+      setSalvando(false);
     }
   }
 
   return (
     <div className="max-w-6xl">
+      <toast.ToastContainer />
       <div className="mb-6">
         <BackButton className="mb-4" />
         <div>
@@ -1189,9 +1204,10 @@ export default function OSNew() {
 
           <button
             type="submit"
-            className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400"
+            disabled={salvando}
+            className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Salvar OS
+            {salvando ? "Salvando..." : "Salvar OS"}
           </button>
         </div>
       </form>

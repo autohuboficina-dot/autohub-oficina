@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ROLE_LABELS, USER_ROLES, type UserRole } from "../../accessControl";
+import { useToast } from "../../components/Toast";
 import { useAuth } from "../../contexts/useAuth";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import {
@@ -146,6 +147,7 @@ const permissionLabels: Record<UserRole, string> = {
 
 export default function Configuracoes({ role }: ConfiguracoesProps) {
   const { oficina_id } = useAuth();
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<ConfigTabId>("oficina");
   const [config, setConfig] = useState<OficinaConfiguracoes>(() => {
     const storedConfig = getConfiguracoesOficina();
@@ -162,6 +164,7 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
   const [editingUsuarioId, setEditingUsuarioId] = useState("");
   const [feedback, setFeedback] = useState("");
   const [configError, setConfigError] = useState("");
+  const [salvandoConfig, setSalvandoConfig] = useState(false);
   const [checklistItems, setChecklistItems] = useState<string[]>(() =>
     getChecklistConfig(),
   );
@@ -270,31 +273,50 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
 
   async function handleSaveConfig(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setConfigError("");
-
-    if (!oficina_id) {
-      setConfigError(
-        "Não foi possível identificar a oficina do usuário logado.",
-      );
+    if (salvandoConfig) {
       return;
     }
 
-    const configToSave = {
-      ...config,
-      cnpj: onlyDigits(config.cnpj),
-      whatsapp: onlyDigits(config.whatsapp),
-    };
-    const savedConfig = await saveConfiguracoesOficinaSupabase(
-      oficina_id,
-      configToSave,
-    );
+    setConfigError("");
 
-    setConfig({
-      ...savedConfig,
-      cnpj: formatCpfCnpj(savedConfig.cnpj),
-      whatsapp: formatPhone(savedConfig.whatsapp),
-    });
-    setFeedback("Configurações da oficina salvas.");
+    if (!oficina_id) {
+      const errorMessage = "Não foi possível identificar a oficina do usuário logado.";
+      setConfigError(errorMessage);
+      toast.error(`Erro ao salvar configurações: ${errorMessage}`);
+      return;
+    }
+
+    setSalvandoConfig(true);
+
+    try {
+      const configToSave = {
+        ...config,
+        nomeOficina: config.nomeOficina.trim(),
+        cnpj: onlyDigits(config.cnpj),
+        whatsapp: onlyDigits(config.whatsapp),
+      };
+      const savedConfig = await saveConfiguracoesOficinaSupabase(
+        oficina_id,
+        configToSave,
+      );
+
+      setConfig({
+        ...savedConfig,
+        cnpj: formatCpfCnpj(savedConfig.cnpj),
+        whatsapp: formatPhone(savedConfig.whatsapp),
+      });
+      setFeedback("Configurações da oficina salvas.");
+      toast.success("Configurações da oficina salvas.");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível salvar as configurações.";
+      setConfigError(errorMessage);
+      toast.error(`Erro ao salvar configurações: ${errorMessage}`);
+    } finally {
+      setSalvandoConfig(false);
+    }
   }
 
   function handleSubmitUsuario(event: FormEvent<HTMLFormElement>) {
@@ -474,6 +496,7 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
 
   return (
     <div className="max-w-7xl space-y-6">
+      <toast.ToastContainer />
       <div>
         <span className="text-sm font-semibold uppercase text-sky-400">
           Configurações
@@ -717,9 +740,10 @@ export default function Configuracoes({ role }: ConfiguracoesProps) {
         <div className="mt-5 flex justify-end">
           <button
             type="submit"
-            className="rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-400"
+            disabled={salvandoConfig}
+            className="rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Salvar configurações
+            {salvandoConfig ? "Salvando..." : "Salvar configurações"}
           </button>
         </div>
       </form>

@@ -155,7 +155,9 @@ export async function getConfiguracoesOficinaSupabase(oficinaId: string) {
     return localConfig;
   }
 
-  return mapOficinaFromSupabase(data);
+  const savedConfig = mapOficinaFromSupabase(data);
+  saveConfiguracoesOficina(savedConfig);
+  return savedConfig;
 }
 
 export async function saveConfiguracoesOficinaSupabase(

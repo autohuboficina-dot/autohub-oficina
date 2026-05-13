@@ -55,6 +55,7 @@ export type ServiceOrderPart = {
   valorUnitario: number;
   valorTotal: number;
   peca_cliente?: boolean;
+  baixaProcessada?: boolean;
   observacao_tecnica?: string;
   compraId?: string;
   custoFornecedorPeca?: number;
@@ -812,6 +813,7 @@ function normalizeOrder(order: ServiceOrder): ServiceOrder {
     pecasNecessarias: (order.pecasNecessarias ?? []).map((part) => ({
       ...part,
       peca_cliente: Boolean(part.peca_cliente),
+      baixaProcessada: Boolean(part.baixaProcessada),
       valorUnitario: part.peca_cliente ? 0 : Number(part.valorUnitario || 0),
       valorTotal: part.peca_cliente ? 0 : Number(part.valorTotal || 0),
       observacao_tecnica: part.observacao_tecnica ?? "",

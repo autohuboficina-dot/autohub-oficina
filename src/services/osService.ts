@@ -565,6 +565,7 @@ async function syncServiceOrderItemsSupabase(
           return {
             ...syncedPart,
             peca_cliente: Boolean(localPart?.peca_cliente),
+            baixaProcessada: Boolean(localPart?.baixaProcessada),
             observacao_tecnica: localPart?.observacao_tecnica ?? "",
             valorUnitario: localPart?.peca_cliente ? 0 : syncedPart.valorUnitario,
             valorTotal: localPart?.peca_cliente ? 0 : syncedPart.valorTotal,
