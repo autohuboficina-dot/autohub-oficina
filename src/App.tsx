@@ -30,6 +30,7 @@ import OSList from "./pages/os/OSList";
 import OSDetail from "./pages/os/OSDetail";
 import OSNew from "./pages/os/OSNew";
 import OrcamentoView from "./pages/orcamento/OrcamentoView";
+import ReciboPublico from "./pages/recibo/ReciboPublico";
 import SDR from "./pages/sdr/SDR";
 import {
   getConfiguracoesOficina,
@@ -130,6 +131,7 @@ function AppContent() {
   const isPublicBudgetRoute =
     location.pathname.startsWith("/orcamento/") ||
     location.pathname.startsWith("/cotacao/") ||
+    location.pathname.startsWith("/recibo/") ||
     location.pathname.startsWith("/fornecedor/cotacao/");
 
   async function handleSignOut() {
@@ -146,6 +148,7 @@ function AppContent() {
           <Routes>
             <Route path="/orcamento/:id" element={<OrcamentoView />} />
             <Route path="/cotacao/:cotacaoId" element={<CotacaoPublica />} />
+            <Route path="/recibo/:token" element={<ReciboPublico />} />
             <Route
               path="/fornecedor/cotacao/:id"
               element={<FornecedorCotacaoView />}
@@ -291,6 +294,7 @@ export default function App() {
             path="/cotacao/:cotacaoId"
             element={<CotacaoPublica />}
           />
+          <Route path="/recibo/:token" element={<ReciboPublico />} />
           <Route
             path="/fornecedor/cotacao/:id"
             element={

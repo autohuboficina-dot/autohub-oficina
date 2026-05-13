@@ -139,6 +139,10 @@ type SupabaseCotacaoRow = {
   id: string;
 };
 
+type SupabaseOrcamentoIdRow = {
+  id: string;
+};
+
 type ServicoCatalogo = {
   id: string;
   nome: string;
@@ -756,6 +760,9 @@ export default function OSDetail() {
   const [publicQuoteLink, setPublicQuoteLink] = useState("");
   const [isPublicQuoteLinkCopied, setIsPublicQuoteLinkCopied] = useState(false);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+  const [receiptPublicLink, setReceiptPublicLink] = useState("");
+  const [isReceiptLinkLoading, setIsReceiptLinkLoading] = useState(false);
+  const [isReceiptLinkCopied, setIsReceiptLinkCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTabId>(() =>
     getDefaultDetailTab(),
   );
@@ -902,6 +909,59 @@ export default function OSDetail() {
       isCancelled = true;
     };
   }, [order]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function generateReceiptLink() {
+      if (!isReceiptModalOpen || !order || !supabase) {
+        return;
+      }
+
+      setIsReceiptLinkLoading(true);
+      setReceiptPublicLink("");
+      setIsReceiptLinkCopied(false);
+
+      try {
+        const resolvedOficinaId = await getOficinaId();
+
+        if (!resolvedOficinaId) {
+          return;
+        }
+
+        const { data: budget } = await supabase
+          .from("orcamentos")
+          .select("id")
+          .eq("oficina_id", resolvedOficinaId)
+          .eq("ordem_servico_id", order.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<SupabaseOrcamentoIdRow>();
+
+        if (!budget?.id) {
+          return;
+        }
+
+        const { data: token } = await supabase.rpc("gerar_recibo_token", {
+          p_orcamento_id: budget.id,
+        });
+
+        if (isMounted && typeof token === "string" && token) {
+          setReceiptPublicLink(`${window.location.origin}/recibo/${token}`);
+        }
+      } finally {
+        if (isMounted) {
+          setIsReceiptLinkLoading(false);
+        }
+      }
+    }
+
+    void generateReceiptLink();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isReceiptModalOpen, order]);
 
   const selectedFornecedor = useMemo(
     () =>
@@ -1555,6 +1615,51 @@ export default function OSDetail() {
     window.open(budgetWhatsappUrl, "_blank", "noopener,noreferrer");
     registerBudgetSent("Orçamento enviado ao cliente pelo WhatsApp.");
     setSaveMessage("WhatsApp aberto com a mensagem do orçamento.");
+  }
+
+  function handleSendReceiptWhatsapp() {
+    if (!receiptOrder || !receiptPublicLink) {
+      return;
+    }
+
+    const phone = getWhatsAppPhone(
+      receiptOrder.clienteDados.telefone ||
+        receiptOrder.clienteTelefone ||
+        receiptOrder.telefone,
+    );
+
+    if (!phone) {
+      setSaveMessage("Telefone do cliente não informado.");
+      return;
+    }
+
+    const message =
+      `Olá ${receiptOrder.clienteDados.nome || receiptOrder.cliente}, obrigado pela preferência!\n\n` +
+      `Segue o recibo do serviço realizado em seu ${
+        receiptOrder.veiculoDados.marca || receiptOrder.veiculoMarca
+      } ${receiptOrder.veiculoDados.modelo || receiptOrder.veiculoModelo}.\n\n` +
+      `${receiptPublicLink}\n\n` +
+      `${oficinaConfig.nomeOficina}`;
+
+    window.open(
+      `https://wa.me/${phone}?text=${encodeURIComponent(message)}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+  }
+
+  async function handleCopyReceiptLink() {
+    if (!receiptPublicLink) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(receiptPublicLink);
+      setIsReceiptLinkCopied(true);
+      window.setTimeout(() => setIsReceiptLinkCopied(false), 2000);
+    } catch {
+      setSaveMessage("Não foi possível copiar o link do recibo.");
+    }
   }
 
   function registerBudgetSent(descricao: string) {
@@ -3314,6 +3419,28 @@ export default function OSDetail() {
               </div>
 
               <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleSendReceiptWhatsapp}
+                  disabled={isReceiptLinkLoading || !receiptPublicLink}
+                  className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isReceiptLinkLoading ? "Gerando link..." : "Enviar por WhatsApp"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleCopyReceiptLink()}
+                  disabled={isReceiptLinkLoading || !receiptPublicLink}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isReceiptLinkLoading
+                    ? "Gerando link..."
+                    : isReceiptLinkCopied
+                      ? "Link copiado!"
+                      : "Copiar link"}
+                </button>
+
                 <button
                   type="button"
                   onClick={() => window.print()}
