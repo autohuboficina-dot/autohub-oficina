@@ -12,6 +12,7 @@ import {
   type UserRole,
 } from "./accessControl";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
+import { ToastProvider } from "./components/Toast";
 import { AuthProvider } from "./contexts/AuthContext";
 import { supabase } from "./lib/supabase";
 import Cadastro from "./pages/cadastro/Cadastro";
@@ -277,43 +278,45 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          <Route path="/cadastro" element={<Cadastro />} />
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/orcamento/:id"
-            element={
-              <div className="min-h-screen bg-slate-950 text-slate-100">
-                <main className="px-4 py-6 sm:px-6 lg:px-8">
-                  <OrcamentoView />
-                </main>
-              </div>
-            }
-          />
-          <Route
-            path="/cotacao/:cotacaoId"
-            element={<CotacaoPublica />}
-          />
-          <Route path="/recibo/:token" element={<ReciboPublico />} />
-          <Route
-            path="/fornecedor/cotacao/:id"
-            element={
-              <div className="min-h-screen bg-slate-950 text-slate-100">
-                <main className="px-4 py-6 sm:px-6 lg:px-8">
-                  <FornecedorCotacaoView />
-                </main>
-              </div>
-            }
-          />
-          <Route
-            path="/*"
-            element={
-              <ProtectedRoute>
-                <AppContent />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
+        <ToastProvider>
+          <Routes>
+            <Route path="/cadastro" element={<Cadastro />} />
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/orcamento/:id"
+              element={
+                <div className="min-h-screen bg-slate-950 text-slate-100">
+                  <main className="px-4 py-6 sm:px-6 lg:px-8">
+                    <OrcamentoView />
+                  </main>
+                </div>
+              }
+            />
+            <Route
+              path="/cotacao/:cotacaoId"
+              element={<CotacaoPublica />}
+            />
+            <Route path="/recibo/:token" element={<ReciboPublico />} />
+            <Route
+              path="/fornecedor/cotacao/:id"
+              element={
+                <div className="min-h-screen bg-slate-950 text-slate-100">
+                  <main className="px-4 py-6 sm:px-6 lg:px-8">
+                    <FornecedorCotacaoView />
+                  </main>
+                </div>
+              }
+            />
+            <Route
+              path="/*"
+              element={
+                <ProtectedRoute>
+                  <AppContent />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </ToastProvider>
       </AuthProvider>
     </BrowserRouter>
   );

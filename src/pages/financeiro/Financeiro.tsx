@@ -1,5 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import type { UserRole } from "../../accessControl";
+import { useToast } from "../../components/Toast";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import { getCotacoes } from "../../services/cotacoesService";
 import { getStoredOrders } from "../../services/osService";
 import {
@@ -337,6 +339,7 @@ function createMetrics(lancamentos: LancamentoFinanceiro[]): FinanceMetric[] {
 }
 
 export default function Financeiro({ role }: FinanceiroProps) {
+  const toast = useToast();
   const [lancamentos, setLancamentos] = useState<LancamentoFinanceiro[]>(() =>
     syncAutomaticLancamentos(),
   );
@@ -395,6 +398,7 @@ export default function Financeiro({ role }: FinanceiroProps) {
     setForm(initialFormState);
     refreshLancamentos();
     setFeedback("Lançamento manual salvo.");
+    toast.success("Lançamento registrado!");
   }
 
   function handleToggleStatus(lancamento: LancamentoFinanceiro) {
@@ -408,13 +412,32 @@ export default function Financeiro({ role }: FinanceiroProps) {
         ? "Lançamento marcado como pendente."
         : "Lançamento marcado como pago.",
     );
+    toast.success("Lançamento atualizado.");
   }
 
   function handleDeleteLancamento(lancamento: LancamentoFinanceiro) {
     deleteLancamento(lancamento.id);
     refreshLancamentos();
     setFeedback("Lançamento removido.");
+    toast.success("Lançamento removido.");
   }
+
+  const { execute: executeSaveLancamento, loading: savingLancamento } =
+    useAsyncAction(handleSaveManualLancamento, {
+      errorMessage: "Erro ao registrar",
+    });
+  const { execute: executeToggleLancamento, loading: togglingLancamento } =
+    useAsyncAction(async (lancamento: LancamentoFinanceiro) => {
+      handleToggleStatus(lancamento);
+    }, {
+      errorMessage: "Erro ao registrar",
+    });
+  const { execute: executeDeleteLancamento, loading: deletingLancamento } =
+    useAsyncAction(async (lancamento: LancamentoFinanceiro) => {
+      handleDeleteLancamento(lancamento);
+    }, {
+      errorMessage: "Erro ao registrar",
+    });
 
   if (role !== "admin" && role !== "financeiro") {
     return (
@@ -529,7 +552,9 @@ export default function Financeiro({ role }: FinanceiroProps) {
 
         <form
           className="mt-5 grid gap-4 lg:grid-cols-[150px_1fr_160px_160px_160px_180px_auto]"
-          onSubmit={handleSaveManualLancamento}
+          onSubmit={(event) => {
+            void executeSaveLancamento(event);
+          }}
         >
           <div>
             <label className={labelClass}>Tipo</label>
@@ -634,9 +659,10 @@ export default function Financeiro({ role }: FinanceiroProps) {
           <div className="flex items-end">
             <button
               type="submit"
-              className="w-full rounded-lg bg-sky-500 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-400"
+              disabled={savingLancamento}
+              className="w-full rounded-lg bg-sky-500 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Salvar
+              {savingLancamento ? "Salvando..." : "Salvar"}
             </button>
           </div>
         </form>
@@ -718,20 +744,24 @@ export default function Financeiro({ role }: FinanceiroProps) {
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() => handleToggleStatus(lancamento)}
-                          className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                          onClick={() => void executeToggleLancamento(lancamento)}
+                          disabled={togglingLancamento}
+                          className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          {lancamento.status === "Pago"
-                            ? "Marcar pendente"
-                            : "Marcar pago"}
+                          {togglingLancamento
+                            ? "Salvando..."
+                            : lancamento.status === "Pago"
+                              ? "Marcar pendente"
+                              : "Marcar pago"}
                         </button>
                         {lancamento.origem === "Manual" && (
                           <button
                             type="button"
-                            onClick={() => handleDeleteLancamento(lancamento)}
-                            className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                            onClick={() => void executeDeleteLancamento(lancamento)}
+                            disabled={deletingLancamento}
+                            className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            Excluir
+                            {deletingLancamento ? "Excluindo..." : "Excluir"}
                           </button>
                         )}
                       </div>

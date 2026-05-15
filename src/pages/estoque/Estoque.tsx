@@ -1,4 +1,6 @@
 import { useMemo, useState, type DragEvent, type FormEvent } from "react";
+import { useToast } from "../../components/Toast";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import {
   atualizarProdutoEstoque,
   criarProdutoEstoque,
@@ -136,6 +138,7 @@ function createProdutoDraft() {
 }
 
 export default function Estoque() {
+  const toast = useToast();
   const [activeTab, setActiveTab] = useState<TabId>("produtos");
   const [produtos, setProdutos] = useState<ProdutoEstoque[]>(() =>
     getProdutosEstoque(),
@@ -253,6 +256,7 @@ export default function Estoque() {
     setEditingProductId("");
     setIsNewProductOpen(false);
     refreshEstoque();
+    toast.success("Produto salvo!");
   }
 
   function cancelProductForm() {
@@ -368,6 +372,7 @@ export default function Estoque() {
     setParsedNota(null);
     setFeedback("Nota fiscal importada com sucesso.");
     refreshEstoque();
+    toast.success("Nota fiscal importada!");
   }
 
   function handleManualSubmit(event: FormEvent<HTMLFormElement>) {
@@ -422,7 +427,25 @@ export default function Estoque() {
     });
     setFeedback("Entrada manual registrada.");
     refreshEstoque();
+    toast.success("Lançamento registrado!");
   }
+
+  const { execute: executeProductSubmit, loading: savingProduct } =
+    useAsyncAction(handleProductSubmit, {
+      errorMessage: "Erro ao salvar produto",
+    });
+  const { execute: executeXmlImport, loading: importingXml } = useAsyncAction(
+    async () => {
+      handleConfirmXmlImport();
+    },
+    {
+      errorMessage: "Erro ao importar XML",
+    },
+  );
+  const { execute: executeManualSubmit, loading: savingManualEntry } =
+    useAsyncAction(handleManualSubmit, {
+      errorMessage: "Erro ao registrar",
+    });
 
   return (
     <div className="max-w-7xl">
@@ -500,7 +523,9 @@ export default function Estoque() {
           {(isNewProductOpen || editingProductId) && (
             <form
               className="mb-6 grid gap-4 rounded-xl border border-slate-800 bg-slate-950 p-4 md:grid-cols-4"
-              onSubmit={handleProductSubmit}
+              onSubmit={(event) => {
+                void executeProductSubmit(event);
+              }}
             >
               <div>
                 <label className={labelClass}>Nome</label>
@@ -561,9 +586,14 @@ export default function Estoque() {
               <div className="flex items-end gap-3 md:col-span-4">
                 <button
                   type="submit"
-                  className="rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+                  disabled={savingProduct}
+                  className="rounded-lg bg-emerald-500 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {editingProductId ? "Salvar produto" : "Cadastrar produto"}
+                  {savingProduct
+                    ? "Salvando..."
+                    : editingProductId
+                      ? "Salvar produto"
+                      : "Cadastrar produto"}
                 </button>
                 <button
                   type="button"
@@ -888,10 +918,11 @@ export default function Estoque() {
               <div className="flex justify-end">
                 <button
                   type="button"
-                  onClick={handleConfirmXmlImport}
-                  className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+                  onClick={() => void executeXmlImport()}
+                  disabled={importingXml}
+                  className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Confirmar entrada no estoque
+                  {importingXml ? "Importando..." : "Confirmar entrada no estoque"}
                 </button>
               </div>
             </div>
@@ -906,7 +937,12 @@ export default function Estoque() {
             Registre reposições sem XML de nota fiscal.
           </p>
 
-          <form className="mt-6 grid gap-5" onSubmit={handleManualSubmit}>
+          <form
+            className="mt-6 grid gap-5"
+            onSubmit={(event) => {
+              void executeManualSubmit(event);
+            }}
+          >
             <div>
               <label className={labelClass}>Produto</label>
               <select
@@ -1054,9 +1090,10 @@ export default function Estoque() {
             <div className="flex justify-end">
               <button
                 type="submit"
-                className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+                disabled={savingManualEntry}
+                className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Registrar entrada
+                {savingManualEntry ? "Registrando..." : "Registrar entrada"}
               </button>
             </div>
           </form>

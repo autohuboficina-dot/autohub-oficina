@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { normalizeRole } from "../../accessControl";
 import { useAuth } from "../../contexts/useAuth";
 import { supabase } from "../../lib/supabase";
 import { updateCurrentRole } from "../../services/configuracoesService";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 
 type LocationState = {
   from?: {
@@ -21,25 +22,20 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [showSenha, setShowSenha] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   useEffect(() => {
     refreshAuth();
   }, [refreshAuth]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const performLogin = useCallback(async () => {
     setErrorMessage("");
 
     if (!supabase) {
-      setErrorMessage(
+      throw new Error(
         "Supabase não configurado. Preencha VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.",
       );
-      return;
     }
-
-    setIsLoading(true);
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -47,9 +43,7 @@ export default function Login() {
     });
 
     if (error) {
-      setIsLoading(false);
-      setErrorMessage("E-mail ou senha incorretos");
-      return;
+      throw new Error("E-mail ou senha incorretos");
     }
 
     if (data.user) {
@@ -71,8 +65,25 @@ export default function Login() {
     }
 
     await refreshAuth();
-    setIsLoading(false);
     navigate(redirectTo, { replace: true });
+  }, [email, navigate, redirectTo, refreshAuth, senha]);
+
+  const { execute: executeLogin, loading: isLoading } = useAsyncAction(
+    performLogin,
+    {
+      successMessage: "Bem-vindo!",
+      errorMessage: "E-mail ou senha incorretos",
+      onError: (error) => {
+        setErrorMessage(
+          error instanceof Error ? error.message : "E-mail ou senha incorretos",
+        );
+      },
+    },
+  );
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void executeLogin();
   }
 
   if (isAuthLoading) {

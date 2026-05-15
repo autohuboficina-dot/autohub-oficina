@@ -1,4 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { useToast } from "../../components/Toast";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import { formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   FORNECEDOR_CATEGORIAS,
@@ -25,6 +27,7 @@ const initialFormState: FornecedorFormState = {
 };
 
 export default function Fornecedores() {
+  const toast = useToast();
   const [fornecedores, setFornecedores] = useState<Fornecedor[]>(() =>
     getFornecedores(),
   );
@@ -100,6 +103,7 @@ export default function Fornecedores() {
 
     setFornecedores(getFornecedores());
     resetForm();
+    toast.success("Fornecedor salvo!");
   }
 
   function handleEditFornecedor(fornecedor: Fornecedor) {
@@ -117,11 +121,23 @@ export default function Fornecedores() {
     deleteFornecedor(fornecedorId);
     setFornecedores(getFornecedores());
     setFeedback("Fornecedor excluído.");
+    toast.success("Fornecedor excluído.");
 
     if (editingFornecedorId === fornecedorId) {
       resetForm();
     }
   }
+
+  const { execute: executeSubmitFornecedor, loading: savingFornecedor } =
+    useAsyncAction(handleSubmit, {
+      errorMessage: "Erro ao salvar fornecedor",
+    });
+  const { execute: executeDeleteFornecedor, loading: deletingFornecedor } =
+    useAsyncAction(async (fornecedorId: string) => {
+      handleDeleteFornecedor(fornecedorId);
+    }, {
+      errorMessage: "Erro ao excluir fornecedor",
+    });
 
   return (
     <div className="max-w-6xl">
@@ -150,7 +166,12 @@ export default function Fornecedores() {
           {editingFornecedorId ? "Editar fornecedor" : "Novo fornecedor"}
         </h3>
 
-        <form className="mt-5 grid gap-5 lg:grid-cols-2" onSubmit={handleSubmit}>
+        <form
+          className="mt-5 grid gap-5 lg:grid-cols-2"
+          onSubmit={(event) => {
+            void executeSubmitFornecedor(event);
+          }}
+        >
           <div>
             <label className={labelClass}>Nome</label>
             <input
@@ -220,9 +241,14 @@ export default function Fornecedores() {
           <div className="flex flex-wrap gap-3 lg:col-span-2">
             <button
               type="submit"
-              className="rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-400"
+              disabled={savingFornecedor}
+              className="rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {editingFornecedorId ? "Salvar alterações" : "Salvar fornecedor"}
+              {savingFornecedor
+                ? "Salvando..."
+                : editingFornecedorId
+                  ? "Salvar alterações"
+                  : "Salvar fornecedor"}
             </button>
 
             {editingFornecedorId && (
@@ -293,10 +319,11 @@ export default function Fornecedores() {
 
                         <button
                           type="button"
-                          onClick={() => handleDeleteFornecedor(fornecedor.id)}
-                          className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10"
+                          onClick={() => void executeDeleteFornecedor(fornecedor.id)}
+                          disabled={deletingFornecedor}
+                          className="rounded-lg border border-red-400/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          Excluir
+                          {deletingFornecedor ? "Excluindo..." : "Excluir"}
                         </button>
                       </div>
                     </td>

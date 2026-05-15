@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import { supabase } from "../../lib/supabase";
 import { formatPhone, onlyDigits } from "../../utils/formatters";
 import {
@@ -709,12 +710,12 @@ export default function OrcamentoView() {
 
     if (publicBudget.status !== "RASCUNHO") {
       setFeedback("Este orçamento não está mais disponível para aprovação.");
-      return;
+      throw new Error("Este orçamento não está mais disponível para aprovação.");
     }
 
     if (!supabase) {
       setFeedback("Conexão com Supabase não configurada.");
-      return;
+      throw new Error("Conexão com Supabase não configurada.");
     }
 
     setIsSubmittingDecision(true);
@@ -732,7 +733,7 @@ export default function OrcamentoView() {
       setFeedback(
         "Não foi possível aprovar o orçamento. Tente novamente ou fale com a oficina.",
       );
-      return;
+      throw new Error("Erro ao aprovar");
     }
 
     const approvalResult = data as {
@@ -746,7 +747,10 @@ export default function OrcamentoView() {
         approvalResult?.message ||
           "Este orçamento está expirado, indisponível ou já foi aprovado.",
       );
-      return;
+      throw new Error(
+        approvalResult?.message ||
+          "Este orçamento está expirado, indisponível ou já foi aprovado.",
+      );
     }
 
     setPublicBudget({
@@ -756,6 +760,14 @@ export default function OrcamentoView() {
     });
     setFeedback("Orçamento aprovado com sucesso");
   }
+
+  const {
+    execute: executeApprovePublicBudget,
+    loading: approvingPublicBudget,
+  } = useAsyncAction(handleApprovePublicBudget, {
+    successMessage: "Orçamento aprovado!",
+    errorMessage: "Erro ao aprovar",
+  });
 
   function getWhatsAppPhone(value: string) {
     const digits = onlyDigits(value);
@@ -979,11 +991,17 @@ export default function OrcamentoView() {
           <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center">
             <button
               type="button"
-              onClick={handleApprovePublicBudget}
-              disabled={!canApprovePublicBudget || isSubmittingDecision}
+              onClick={() => void executeApprovePublicBudget()}
+              disabled={
+                !canApprovePublicBudget ||
+                isSubmittingDecision ||
+                approvingPublicBudget
+              }
               className="rounded-2xl bg-emerald-500 px-8 py-4 text-base font-bold text-white shadow-lg shadow-emerald-950/40 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-[260px]"
             >
-              {isSubmittingDecision ? "Processando..." : "Aprovar orçamento"}
+              {isSubmittingDecision || approvingPublicBudget
+                ? "Processando..."
+                : "Aprovar orçamento"}
             </button>
           </div>
           {!canApprovePublicBudget && (

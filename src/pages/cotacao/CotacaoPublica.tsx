@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import { supabase } from "../../lib/supabase";
 
 type CotacaoStatus = "COTACAO_ENVIADA" | string;
@@ -64,7 +65,6 @@ export default function CotacaoPublica() {
   const [cotacao, setCotacao] = useState<PublicCotacaoData | null>(null);
   const [responses, setResponses] = useState<ItemResponseForm[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -160,7 +160,7 @@ export default function CotacaoPublica() {
 
     if (!supabase || !cotacaoId) {
       setStatus("error");
-      return;
+      throw new Error("Esta solicitação não foi encontrada.");
     }
 
     const invalidItem = responses.some(
@@ -172,10 +172,8 @@ export default function CotacaoPublica() {
       setErrorMessage(
         "Informe o preço de todos os itens ou marque como indisponível.",
       );
-      return;
+      throw new Error("Informe o preço de todos os itens ou marque como indisponível.");
     }
-
-    setIsSubmitting(true);
 
     const items = responses.map((response) => ({
       cotacao_item_id: response.cotacaoItemId,
@@ -191,15 +189,26 @@ export default function CotacaoPublica() {
       p_items: items,
     });
 
-    setIsSubmitting(false);
-
     if (error) {
       setErrorMessage("Não foi possível enviar a cotação. Tente novamente.");
-      return;
+      throw new Error("Erro ao enviar");
     }
 
     setStatus("sent");
   }
+
+  const { execute: executeSubmitQuote, loading: isSubmitting } = useAsyncAction(
+    handleSubmit,
+    {
+      successMessage: "Cotação enviada!",
+      errorMessage: "Erro ao enviar",
+      onError: (error) => {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Erro ao enviar",
+        );
+      },
+    },
+  );
 
   if (status === "loading") {
     return (
@@ -392,7 +401,7 @@ export default function CotacaoPublica() {
         <div className="mt-6 flex justify-end">
           <button
             type="button"
-            onClick={() => void handleSubmit()}
+            onClick={() => void executeSubmitQuote()}
             disabled={isSubmitting}
             className="rounded-xl bg-emerald-500 px-6 py-3 text-sm font-bold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
           >

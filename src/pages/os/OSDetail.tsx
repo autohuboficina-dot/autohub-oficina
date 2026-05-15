@@ -5,6 +5,7 @@ import BackButton from "../../components/ui/BackButton";
 import ReciboOS from "../../components/ReciboOS";
 import { useToast } from "../../components/Toast";
 import { useAuth } from "../../contexts/useAuth";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import { supabase } from "../../lib/supabase";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import { getOficinaId } from "../../utils/getOficinaId";
@@ -2486,6 +2487,35 @@ export default function OSDetail() {
     }
   }
 
+  const { execute: executeSendBudget, loading: sendingBudget } = useAsyncAction(
+    handleSendBudget,
+    {
+      errorMessage: "Erro ao enviar orçamento",
+    },
+  );
+  const { execute: executeOpenQuoteModal, loading: requestingQuote } =
+    useAsyncAction(async () => {
+      handleOpenQuoteModal();
+    }, {
+      errorMessage: "Erro ao solicitar cotação",
+    });
+  const { execute: executeSaveChanges, loading: savingChanges } =
+    useAsyncAction(handleSaveChanges, {
+      errorMessage: "Erro ao salvar alterações",
+    });
+  const { execute: executeGenerateBudget, loading: generatingBudget } =
+    useAsyncAction(handleGenerateBudget, {
+      errorMessage: "Erro ao gerar orçamento",
+    });
+  const { execute: executeChooseQuoteSupplier, loading: confirmingPurchase } =
+    useAsyncAction(handleChooseQuoteSupplier, {
+      errorMessage: "Erro ao confirmar compra",
+    });
+  const { execute: executeManualStatusAction, loading: updatingStatus } =
+    useAsyncAction(handleManualStatusAction, {
+      errorMessage: "Erro ao atualizar OS",
+    });
+
   if (isLoadingOrder && !order) {
     return (
       <div>
@@ -2545,20 +2575,20 @@ export default function OSDetail() {
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={handleSendBudget}
-            disabled={actionInProgress === "enviarOrcamento"}
+            onClick={() => void executeSendBudget()}
+            disabled={actionInProgress === "enviarOrcamento" || sendingBudget}
             className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Enviar orçamento"}
+            {actionInProgress === "enviarOrcamento" || sendingBudget ? "Enviando..." : "Enviar orçamento"}
           </button>
 
           <button
             type="button"
-            onClick={handleOpenQuoteModal}
-            disabled={actionInProgress === "solicitarCotacao"}
+            onClick={() => void executeOpenQuoteModal()}
+            disabled={actionInProgress === "solicitarCotacao" || requestingQuote}
             className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {actionInProgress === "solicitarCotacao" ? "Solicitando..." : "Solicitar cotação"}
+            {actionInProgress === "solicitarCotacao" || requestingQuote ? "Solicitando..." : "Solicitar cotação"}
           </button>
         </div>
       </div>
@@ -2609,7 +2639,7 @@ export default function OSDetail() {
             <button
               type="button"
               onClick={() =>
-                handleManualStatusAction(
+                void executeManualStatusAction(
                   "EM_DIAGNOSTICO",
                   "Diagnóstico iniciado",
                   "OS movida para diagnóstico inicial.",
@@ -2624,27 +2654,27 @@ export default function OSDetail() {
 
           <button
             type="button"
-            onClick={handleOpenQuoteModal}
-            disabled={actionInProgress === "solicitarCotacao"}
+            onClick={() => void executeOpenQuoteModal()}
+            disabled={actionInProgress === "solicitarCotacao" || requestingQuote}
             className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {actionInProgress === "solicitarCotacao" ? "Solicitando..." : "Solicitar cotação"}
+            {actionInProgress === "solicitarCotacao" || requestingQuote ? "Solicitando..." : "Solicitar cotação"}
           </button>
 
           <button
             type="button"
-            onClick={handleSendBudget}
-            disabled={actionInProgress === "enviarOrcamento"}
+            onClick={() => void executeSendBudget()}
+            disabled={actionInProgress === "enviarOrcamento" || sendingBudget}
             className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Enviar orçamento"}
+            {actionInProgress === "enviarOrcamento" || sendingBudget ? "Enviando..." : "Enviar orçamento"}
           </button>
 
           {status === "APROVADA" && (
             <button
               type="button"
               onClick={() =>
-                handleManualStatusAction(
+                void executeManualStatusAction(
                   "EM_EXECUCAO",
                   "Serviço iniciado",
                   "Execução do serviço iniciada.",
@@ -2660,17 +2690,17 @@ export default function OSDetail() {
           <button
             type="button"
             onClick={() =>
-              handleManualStatusAction(
+              void executeManualStatusAction(
                 "AGUARDANDO_PECA",
                 "Aguardando peça",
                 "OS marcada como aguardando peça.",
                 "aguardando_peca",
               )
             }
-            disabled={actionInProgress === "aguardandoPeca"}
+            disabled={actionInProgress === "aguardandoPeca" || updatingStatus}
             className="rounded-lg border border-orange-400/40 px-4 py-2 text-sm font-semibold text-orange-200 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {actionInProgress === "aguardandoPeca"
+            {actionInProgress === "aguardandoPeca" || updatingStatus
               ? "Marcando..."
               : "Marcar aguardando peça"}
           </button>
@@ -2679,7 +2709,7 @@ export default function OSDetail() {
             <button
               type="button"
               onClick={() =>
-                handleManualStatusAction(
+                void executeManualStatusAction(
                   "FINALIZADA",
                   "Serviço finalizado",
                   "Execução do serviço finalizada.",
@@ -2696,7 +2726,7 @@ export default function OSDetail() {
             <button
               type="button"
               onClick={() =>
-                handleManualStatusAction(
+                void executeManualStatusAction(
                   "ENTREGUE",
                   "Veículo entregue",
                   "Veículo entregue ao cliente.",
@@ -2724,17 +2754,17 @@ export default function OSDetail() {
             <button
               type="button"
               onClick={() =>
-                handleManualStatusAction(
+                void executeManualStatusAction(
                   "CANCELADA",
                   "OS cancelada",
                   "Ordem de serviço cancelada pela oficina.",
                   "cancelamento",
                 )
               }
-              disabled={actionInProgress === "cancelarOs"}
+              disabled={actionInProgress === "cancelarOs" || updatingStatus}
               className="rounded-lg border border-red-400/40 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {actionInProgress === "cancelarOs" ? "Cancelando..." : "Cancelar OS"}
+              {actionInProgress === "cancelarOs" || updatingStatus ? "Cancelando..." : "Cancelar OS"}
             </button>
           )}
         </div>
@@ -2779,11 +2809,11 @@ export default function OSDetail() {
 
                 <button
                   type="button"
-                  onClick={handleSendBudget}
-                  disabled={actionInProgress === "enviarOrcamento"}
+                  onClick={() => void executeSendBudget()}
+                  disabled={actionInProgress === "enviarOrcamento" || sendingBudget}
                   className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Abrir WhatsApp"}
+                  {actionInProgress === "enviarOrcamento" || sendingBudget ? "Enviando..." : "Abrir WhatsApp"}
                 </button>
               </div>
             </div>
@@ -3333,7 +3363,7 @@ export default function OSDetail() {
                                         <button
                                           type="button"
                                           onClick={() =>
-                                            void handleChooseQuoteSupplier(
+                                            void executeChooseQuoteSupplier(
                                               cotacao,
                                               cotacaoPart,
                                               response,
@@ -3342,11 +3372,12 @@ export default function OSDetail() {
                                           }
                                           disabled={
                                             Boolean(selectedChoice) ||
-                                            Boolean(confirmingPurchaseKey)
+                                            Boolean(confirmingPurchaseKey) ||
+                                            confirmingPurchase
                                           }
                                           className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
-                                          {isConfirmingPurchase
+                                          {isConfirmingPurchase || confirmingPurchase
                                             ? "Confirmando..."
                                             : isSelected
                                               ? "Compra confirmada"
@@ -3657,7 +3688,7 @@ export default function OSDetail() {
         className="space-y-6"
         onSubmit={(event) => {
           event.preventDefault();
-          handleSaveChanges();
+          void executeSaveChanges();
         }}
       >
         {activeTab === "overview" && (
@@ -4377,42 +4408,42 @@ export default function OSDetail() {
           {activeTab === "pecas" && (
             <button
               type="button"
-              onClick={handleOpenQuoteModal}
-              disabled={actionInProgress === "solicitarCotacao"}
+              onClick={() => void executeOpenQuoteModal()}
+              disabled={actionInProgress === "solicitarCotacao" || requestingQuote}
               className="rounded-xl bg-amber-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {actionInProgress === "solicitarCotacao" ? "Solicitando..." : "Solicitar cotação"}
+              {actionInProgress === "solicitarCotacao" || requestingQuote ? "Solicitando..." : "Solicitar cotação"}
             </button>
           )}
 
           {activeTab === "orcamento" && (
             <button
               type="button"
-              onClick={handleSendBudget}
-              disabled={actionInProgress === "enviarOrcamento"}
+              onClick={() => void executeSendBudget()}
+              disabled={actionInProgress === "enviarOrcamento" || sendingBudget}
               className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {actionInProgress === "enviarOrcamento" ? "Enviando..." : "Enviar orçamento"}
+              {actionInProgress === "enviarOrcamento" || sendingBudget ? "Enviando..." : "Enviar orçamento"}
             </button>
           )}
 
           {activeTab === "orcamento" && (
             <button
               type="button"
-              onClick={handleGenerateBudget}
-              disabled={actionInProgress === "gerarOrcamento"}
+              onClick={() => void executeGenerateBudget()}
+              disabled={actionInProgress === "gerarOrcamento" || generatingBudget}
               className="rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {actionInProgress === "gerarOrcamento" ? "Gerando..." : "Gerar orçamento"}
+              {actionInProgress === "gerarOrcamento" || generatingBudget ? "Gerando..." : "Gerar orçamento"}
             </button>
           )}
 
           <button
             type="submit"
-            disabled={actionInProgress === "salvarAlteracoes"}
+            disabled={actionInProgress === "salvarAlteracoes" || savingChanges}
             className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {actionInProgress === "salvarAlteracoes"
+            {actionInProgress === "salvarAlteracoes" || savingChanges
               ? "Salvando..."
               : "Salvar alterações"}
           </button>

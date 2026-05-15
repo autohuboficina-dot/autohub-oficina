@@ -1,7 +1,8 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 
 type CadastroForm = {
   nomeOficina: string;
@@ -83,7 +84,6 @@ export default function Cadastro() {
   const formSectionRef = useRef<HTMLElement | null>(null);
   const [form, setForm] = useState<CadastroForm>(initialForm);
   const [errorMessage, setErrorMessage] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const [showSenha, setShowSenha] = useState(false);
   const [showConfirmarSenha, setShowConfirmarSenha] = useState(false);
 
@@ -101,25 +101,20 @@ export default function Cadastro() {
     });
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const createAccount = useCallback(async () => {
     setErrorMessage("");
 
     const validationError = validateForm(form);
 
     if (validationError) {
-      setErrorMessage(validationError);
-      return;
+      throw new Error(validationError);
     }
 
     if (!supabase) {
-      setErrorMessage(
+      throw new Error(
         "Supabase não configurado. Preencha VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.",
       );
-      return;
     }
-
-    setIsLoading(true);
 
     const email = form.email.trim();
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
@@ -128,9 +123,7 @@ export default function Cadastro() {
     });
 
     if (signUpError || !signUpData.user) {
-      setErrorMessage(translateSupabaseError(signUpError?.message || ""));
-      setIsLoading(false);
-      return;
+      throw new Error(translateSupabaseError(signUpError?.message || ""));
     }
 
     const { data: signInData, error: signInError } =
@@ -140,10 +133,7 @@ export default function Cadastro() {
       });
 
     if (signInError || !signInData.session) {
-      setErrorMessage("Conta criada. Faça login para continuar.");
-      setIsLoading(false);
-      navigate("/login", { replace: true });
-      return;
+      throw new Error("Conta criada. Faça login para continuar.");
     }
 
     const { error: rpcError } = await supabase.rpc("criar_oficina_e_usuario", {
@@ -153,18 +143,40 @@ export default function Cadastro() {
       p_email: email,
     });
 
-    setIsLoading(false);
-
     if (rpcError) {
-      setErrorMessage("Erro ao configurar sua oficina. Entre em contato.");
-      return;
+      throw new Error("Erro ao configurar sua oficina. Entre em contato.");
     }
 
     localStorage.setItem("autohub:perfil", "admin");
+    return form.nomeUsuario.trim();
+  }, [form]);
+
+  const { execute: executeCreateAccount, loading: isLoading } = useAsyncAction(
+    createAccount,
+    {
+      successMessage: "Conta criada!",
+      errorMessage: "Erro ao criar conta",
+      onError: (error) => {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Erro ao criar conta",
+        );
+      },
+    },
+  );
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nomeUsuario = await executeCreateAccount();
+
+    if (!nomeUsuario) {
+      return;
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 800));
     navigate("/dashboard", {
       replace: true,
       state: {
-        welcomeMessage: `Bem-vindo ao AutoHub Oficina, ${form.nomeUsuario.trim()}!`,
+        welcomeMessage: `Bem-vindo ao AutoHub Oficina, ${nomeUsuario}!`,
       },
     });
   }

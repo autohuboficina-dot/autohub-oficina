@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
 import { useToast } from "../../components/Toast";
 import { useAuth } from "../../contexts/useAuth";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import {
   getClientes,
@@ -542,6 +543,13 @@ export default function OSNew() {
     }
   }
 
+  const { execute: executeSaveOrder, loading: savingOrder } = useAsyncAction(
+    handleSaveOrder,
+    {
+      errorMessage: "Erro ao criar OS",
+    },
+  );
+
   return (
     <div className="max-w-6xl">
       <toast.ToastContainer />
@@ -559,7 +567,7 @@ export default function OSNew() {
         className="space-y-6"
         onSubmit={(event) => {
           event.preventDefault();
-          handleSaveOrder();
+          void executeSaveOrder();
         }}
       >
         {formError && (
@@ -1204,10 +1212,10 @@ export default function OSNew() {
 
           <button
             type="submit"
-            disabled={salvando}
+            disabled={salvando || savingOrder}
             className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {salvando ? "Salvando..." : "Salvar OS"}
+            {salvando || savingOrder ? "Salvando..." : "Salvar OS"}
           </button>
         </div>
       </form>

@@ -1,5 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import BackButton from "../../components/ui/BackButton";
+import { useToast } from "../../components/Toast";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import {
   getCotacoes,
   saveCotacao,
@@ -102,6 +104,7 @@ function getFornecedorName(cotacao: CotacaoPeca) {
 }
 
 export default function Compras() {
+  const toast = useToast();
   const [fornecedores] = useState<Fornecedor[]>(() => getFornecedores());
   const [oficinaConfig] = useState(() => getConfiguracoesOficina());
   const [cotacoes, setCotacoes] = useState<CotacaoPeca[]>(() => getCotacoes());
@@ -237,8 +240,14 @@ export default function Compras() {
 
     setCotacoes((currentCotacoes) => [confirmedCotacao, ...currentCotacoes]);
     setFeedback("Compra avulsa registrada com sucesso.");
+    toast.success("Compra confirmada!");
     resetCompraAvulsaForm();
   }
+
+  const { execute: executeCompraAvulsa, loading: savingCompraAvulsa } =
+    useAsyncAction(handleCompraAvulsaSubmit, {
+      errorMessage: "Erro ao solicitar cotação",
+    });
 
   return (
     <div className="max-w-6xl">
@@ -351,7 +360,12 @@ export default function Compras() {
         </div>
 
         {showCompraAvulsaForm && (
-          <form className="mt-6 grid gap-5" onSubmit={handleCompraAvulsaSubmit}>
+          <form
+            className="mt-6 grid gap-5"
+            onSubmit={(event) => {
+              void executeCompraAvulsa(event);
+            }}
+          >
             <div>
               <label className={labelClass}>Fornecedor</label>
               <select
@@ -437,9 +451,10 @@ export default function Compras() {
 
               <button
                 type="submit"
-                className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400"
+                disabled={savingCompraAvulsa}
+                className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Registrar compra
+                {savingCompraAvulsa ? "Registrando..." : "Registrar compra"}
               </button>
             </div>
           </form>

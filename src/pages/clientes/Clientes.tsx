@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import BackButton from "../../components/ui/BackButton";
+import { useToast } from "../../components/Toast";
 import { useAuth } from "../../contexts/useAuth";
+import { useAsyncAction } from "../../hooks/useAsyncAction";
 import { formatCpfCnpj, formatPhone, onlyDigits } from "../../utils/formatters";
 import { vehicleBrands, vehicleModelsByBrand } from "../vehicleCatalog";
 import {
@@ -66,6 +68,7 @@ function normalizePlate(value: string) {
 
 export default function Clientes() {
   const navigate = useNavigate();
+  const toast = useToast();
   const { oficina_id } = useAuth();
   const [clientes, setClientes] = useState<Cliente[]>(() => getClientes());
   const [form, setForm] = useState<ClienteForm>(createBlankForm);
@@ -201,11 +204,12 @@ export default function Clientes() {
     try {
       await deleteClienteSupabase(oficina_id, cliente.id);
     } catch (error) {
-      setFormError(
+      const message =
         error instanceof Error
           ? error.message
-          : "Não foi possível excluir o cliente.",
-      );
+          : "Não foi possível excluir o cliente.";
+      setFormError(message);
+      toast.error("Erro ao excluir cliente");
       return;
     }
     if (selectedCliente?.id === cliente.id) {
@@ -215,6 +219,7 @@ export default function Clientes() {
       resetForm();
     }
     await refreshClientes();
+    toast.success("Cliente excluído.");
   }
 
   function updateVehicle(
@@ -346,17 +351,28 @@ export default function Clientes() {
         await saveClienteSupabase(oficina_id, clienteData);
       }
     } catch (error) {
-      setFormError(
+      const message =
         error instanceof Error
           ? error.message
-          : "Não foi possível salvar o cliente.",
-      );
+          : "Não foi possível salvar o cliente.";
+      setFormError(message);
+      toast.error("Erro ao salvar cliente");
       return;
     }
 
     resetForm();
     await refreshClientes();
+    toast.success("Cliente salvo!");
   }
+
+  const { execute: executeSubmitCliente, loading: savingCliente } =
+    useAsyncAction(handleSubmit, {
+      errorMessage: "Erro ao salvar cliente",
+    });
+  const { execute: executeDeleteCliente, loading: deletingCliente } =
+    useAsyncAction(handleDeleteCliente, {
+      errorMessage: "Erro ao excluir cliente",
+    });
 
   return (
     <div className="max-w-7xl">
@@ -425,7 +441,12 @@ export default function Clientes() {
             </div>
           )}
 
-          <form className="space-y-6" onSubmit={handleSubmit}>
+          <form
+            className="space-y-6"
+            onSubmit={(event) => {
+              void executeSubmitCliente(event);
+            }}
+          >
             <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
               <div>
                 <label className={labelClass}>Tipo de cliente</label>
@@ -771,9 +792,14 @@ export default function Clientes() {
 
               <button
                 type="submit"
-                className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400"
+                disabled={savingCliente}
+                className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isEditing ? "Salvar alterações" : "Salvar cliente"}
+                {savingCliente
+                  ? "Salvando..."
+                  : isEditing
+                    ? "Salvar alterações"
+                    : "Salvar cliente"}
               </button>
             </div>
           </form>
@@ -860,10 +886,11 @@ export default function Clientes() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDeleteCliente(cliente)}
-                        className="whitespace-nowrap rounded bg-red-500/20 px-3 py-1 text-xs text-red-200 hover:bg-red-500/30"
+                        onClick={() => void executeDeleteCliente(cliente)}
+                        disabled={deletingCliente}
+                        className="whitespace-nowrap rounded bg-red-500/20 px-3 py-1 text-xs text-red-200 hover:bg-red-500/30 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        Excluir
+                        {deletingCliente ? "Excluindo..." : "Excluir"}
                       </button>
                     </div>
                   </td>
