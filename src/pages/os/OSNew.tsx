@@ -131,7 +131,6 @@ export default function OSNew() {
   const [savedBudgetToken, setSavedBudgetToken] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [formError, setFormError] = useState("");
-  const [salvando, setSalvando] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -357,10 +356,6 @@ export default function OSNew() {
   }
 
   async function handleSaveOrder() {
-    if (salvando) {
-      return;
-    }
-
     setFormError("");
 
     if (!oficina_id) {
@@ -378,7 +373,6 @@ export default function OSNew() {
       return;
     }
 
-    setSalvando(true);
     try {
       const currentOrders = await getStoredOrdersSupabase(oficina_id);
       const nextOrderCode = createNextOrderCode(currentOrders);
@@ -546,8 +540,6 @@ export default function OSNew() {
       }
 
       toast.error(errorMessage);
-    } finally {
-      setSalvando(false);
     }
   }
 
@@ -1220,10 +1212,10 @@ export default function OSNew() {
 
           <button
             type="submit"
-            disabled={salvando || savingOrder}
+            disabled={savingOrder}
             className="rounded-xl bg-sky-500 px-6 py-3 font-semibold text-white hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {salvando || savingOrder ? "Salvando..." : "Salvar OS"}
+            {savingOrder ? "Salvando..." : "Salvar OS"}
           </button>
         </div>
       </form>
