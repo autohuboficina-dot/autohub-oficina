@@ -11,6 +11,7 @@ import {
   type ServiceOrderTimelineEvent,
 } from "../pages/os/osStorage";
 import { supabase } from "../lib/supabase";
+import { isValidUuid } from "../utils/isValidUuid";
 
 type OrdemServicoSupabaseRow = {
   id: string;
@@ -104,12 +105,6 @@ type OrcamentoSupabaseRow = {
   forma_pagamento: string | null;
   total_final: number | null;
 };
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  );
-}
 
 function logSupabaseFallback(scope: string, error: unknown) {
   console.error(`[Supabase:${scope}] Usando fallback localStorage.`, error);
@@ -295,7 +290,7 @@ async function fetchServiceOrderBudgetSupabase(
   oficinaId: string,
   orderId: string,
 ) {
-  if (!supabase || !isUuid(orderId)) {
+  if (!supabase || !isValidUuid(orderId)) {
     return null;
   }
 
@@ -371,7 +366,7 @@ async function fetchServiceOrderTimelineSupabase(
   oficinaId: string,
   orderId: string,
 ) {
-  if (!supabase || !isUuid(orderId)) {
+  if (!supabase || !isValidUuid(orderId)) {
     return [] as ServiceOrderTimelineEvent[];
   }
 
@@ -397,7 +392,7 @@ async function syncServiceOrderTimelineSupabase(
   oficinaId: string,
   order: ServiceOrder,
 ) {
-  if (!supabase || !isUuid(order.id)) {
+  if (!supabase || !isValidUuid(order.id)) {
     return order;
   }
 
@@ -412,7 +407,7 @@ async function syncServiceOrderTimelineSupabase(
   }
 
   const timelinePayload = (order.timeline || []).map((event) => ({
-    id: isUuid(event.id) ? event.id : undefined,
+    ...(isValidUuid(event.id) ? { id: event.id } : {}),
     oficina_id: oficinaId,
     ordem_servico_id: order.id,
     tipo: event.tipo || "evento",
@@ -490,7 +485,7 @@ async function syncServiceOrderItemsSupabase(
 ) {
   const client = supabase;
 
-  if (!client || !isUuid(order.id)) {
+  if (!client || !isValidUuid(order.id)) {
     return order;
   }
 
@@ -520,7 +515,7 @@ async function syncServiceOrderItemsSupabase(
       quantidade: Number(part.quantidade || 0),
       valor_unitario: Number(part.valorUnitario || 0),
       cotacao_item_id:
-        part.cotacaoPecaId && isUuid(part.cotacaoPecaId)
+        part.cotacaoPecaId && isValidUuid(part.cotacaoPecaId)
           ? part.cotacaoPecaId
           : null,
       origem_checklist: part.origemChecklist || null,
@@ -593,7 +588,7 @@ export async function saveServiceOrderBudgetSupabase(
     },
   };
 
-  if (!supabase || !isUuid(order.id)) {
+  if (!supabase || !isValidUuid(order.id)) {
     mirrorLocalOrder(localOrder);
     return localOrder;
   }
@@ -770,7 +765,7 @@ export async function getServiceOrderSupabase(oficinaId: string, id: string) {
     )
     .eq("oficina_id", oficinaId);
 
-  query = isUuid(id) ? query.eq("id", id) : query.eq("codigo", id);
+  query = isValidUuid(id) ? query.eq("id", id) : query.eq("codigo", id);
 
   const { data, error } = await query.maybeSingle<OrdemServicoSupabaseRow>();
 
@@ -842,7 +837,7 @@ export async function createServiceOrderSupabase(
     return order;
   }
 
-  if (!isUuid(order.clienteId) || !isUuid(order.veiculoId)) {
+  if (!isValidUuid(order.clienteId) || !isValidUuid(order.veiculoId)) {
     throw new Error("Cliente e veículo precisam estar salvos no Supabase antes de criar a OS.");
   }
 
@@ -909,7 +904,7 @@ export async function updateServiceOrderSupabase(
     return order;
   }
 
-  if (!isUuid(order.id)) {
+  if (!isValidUuid(order.id)) {
     throw new Error("Esta OS ainda não está salva no Supabase.");
   }
 

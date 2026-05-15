@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { isValidUuid } from "../utils/isValidUuid";
 import {
   getCotacoes,
   saveCotacao,
@@ -119,12 +120,6 @@ const STATUS_FROM_DB: Record<CotacaoStatusDb, CotacaoStatus> = {
   COMPRA_CONFIRMADA_FORNECEDOR: "Compra confirmada com fornecedor",
   CANCELADA: "Cancelada",
 };
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  );
-}
 
 function mirrorCotacao(cotacao: CotacaoPeca) {
   const local = getCotacoes();
@@ -419,7 +414,7 @@ export async function saveCotacaoSupabase(
     return saveCotacao(cotacao);
   }
 
-  if (!cotacao.osId || !isUuid(cotacao.osId) || !isUuid(cotacao.fornecedorId)) {
+  if (!cotacao.osId || !isValidUuid(cotacao.osId) || !isValidUuid(cotacao.fornecedorId)) {
     return saveCotacao(cotacao);
   }
 
@@ -468,7 +463,7 @@ export async function saveCotacaoSupabase(
 export async function updateCotacaoSupabase(cotacao: CotacaoPeca) {
   const localCotacao = updateCotacao(cotacao);
 
-  if (!supabase || !isUuid(cotacao.id)) {
+  if (!supabase || !isValidUuid(cotacao.id)) {
     return localCotacao;
   }
 
@@ -500,12 +495,12 @@ export async function updateCotacaoSupabase(cotacao: CotacaoPeca) {
 
   const responsesPayload = cotacao.responses.flatMap((response) =>
     response.itemResponses
-      .filter((item) => isUuid(item.pecaId))
+      .filter((item) => isValidUuid(item.pecaId))
       .map((item) => ({
         oficina_id: "",
         cotacao_id: cotacao.id,
         cotacao_item_id: item.pecaId,
-        fornecedor_id: isUuid(response.fornecedorId)
+        fornecedor_id: isValidUuid(response.fornecedorId)
           ? response.fornecedorId
           : null,
         preco: item.preco,
@@ -558,9 +553,9 @@ export async function selectCotacaoFornecedorSupabase(
 ) {
   if (
     !supabase ||
-    !isUuid(cotacao.id) ||
-    !isUuid(choice.pecaId) ||
-    !isUuid(choice.fornecedorId)
+    !isValidUuid(cotacao.id) ||
+    !isValidUuid(choice.pecaId) ||
+    !isValidUuid(choice.fornecedorId)
   ) {
     return updateCotacao(cotacao);
   }
@@ -696,7 +691,7 @@ export async function selectCotacaoFornecedorSupabase(
 }
 
 export async function getPublicCotacaoSupabase(id: string) {
-  if (!supabase || !isUuid(id)) {
+  if (!supabase || !isValidUuid(id)) {
     return getCotacoes().find((cotacao) => cotacao.id === id);
   }
 
@@ -716,7 +711,7 @@ export async function submitPublicCotacaoResponseSupabase(
   cotacao: CotacaoPeca,
   itemResponses: CotacaoPecaRespostaItem[],
 ) {
-  if (!supabase || !isUuid(cotacao.id)) {
+  if (!supabase || !isValidUuid(cotacao.id)) {
     const total = itemResponses.reduce(
       (sum, item) => sum + item.preco * item.quantidade,
       0,

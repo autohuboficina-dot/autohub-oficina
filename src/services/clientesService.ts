@@ -10,6 +10,7 @@ import {
   type TipoVeiculo,
 } from "../pages/clientes/clientesStorage";
 import { supabase } from "../lib/supabase";
+import { isValidUuid } from "../utils/isValidUuid";
 
 type ClienteSupabaseRow = {
   id: string;
@@ -50,12 +51,6 @@ function fromDbClienteTipo(tipo: string | null): ClienteTipo {
   }
 
   return "Pessoa física";
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value,
-  );
 }
 
 function logSupabaseFallback(scope: string, error: unknown) {
@@ -186,7 +181,7 @@ async function saveVeiculosSupabase(
 
   const storedIds = new Set((storedVeiculos ?? []).map((veiculo) => veiculo.id));
   const formUuidIds = new Set(
-    veiculos.filter((veiculo) => isUuid(veiculo.id)).map((veiculo) => veiculo.id),
+    veiculos.filter((veiculo) => isValidUuid(veiculo.id)).map((veiculo) => veiculo.id),
   );
   const idsToDelete = [...storedIds].filter((id) => !formUuidIds.has(id));
 
@@ -207,7 +202,7 @@ async function saveVeiculosSupabase(
     veiculos.map(async (veiculo) => {
       const payload = mapVeiculoToSupabase(oficinaId, clienteId, veiculo);
 
-      if (isUuid(veiculo.id) && storedIds.has(veiculo.id)) {
+      if (isValidUuid(veiculo.id) && storedIds.has(veiculo.id)) {
         const { error } = await client
           .from("veiculos")
           .update(payload)
@@ -395,7 +390,7 @@ export async function updateClienteSupabase(oficinaId: string, cliente: Cliente)
     throw new Error("Não foi possível identificar a oficina do usuário logado.");
   }
 
-  if (!supabase || !isUuid(cliente.id)) {
+  if (!supabase || !isValidUuid(cliente.id)) {
     return updateCliente(cliente);
   }
 
@@ -433,7 +428,7 @@ export async function updateClienteSupabase(oficinaId: string, cliente: Cliente)
 }
 
 export async function deleteClienteSupabase(oficinaId: string, clienteId: string) {
-  if (!oficinaId || !supabase || !isUuid(clienteId)) {
+  if (!oficinaId || !supabase || !isValidUuid(clienteId)) {
     deleteCliente(clienteId);
     return;
   }

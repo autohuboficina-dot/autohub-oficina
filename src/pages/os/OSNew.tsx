@@ -530,14 +530,22 @@ export default function OSNew() {
       setSaveMessage(`OS ${savedOrder.codigo} salva com sucesso.`);
       toast.success(`OS ${savedOrder.codigo} criada com sucesso!`);
       await new Promise((resolve) => window.setTimeout(resolve, 800));
-      navigate(`/os/${savedOrder.codigo}`);
+      navigate("/os");
     } catch (error) {
       const errorMessage =
         error instanceof Error
           ? error.message
           : "Não foi possível salvar a OS.";
+
+      console.error("[OSNew:create] Falha ao salvar OS.", error);
       setFormError(errorMessage);
-      toast.error(`Erro ao criar OS: ${errorMessage}`);
+
+      if (errorMessage.startsWith("OS criada,")) {
+        toast.error("OS criada parcialmente. Verifique os itens.");
+        return;
+      }
+
+      toast.error(errorMessage);
     } finally {
       setSalvando(false);
     }
